@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>SSO 測試</title>
+</head>
+<body>
+
+<h3>SSO URL 編輯</h3>
+
+<div>
+    loginName: <input id="loginName" value="user1"><br><br>
+    token: <input id="token" value="abcdefghijklmnopqrstuvwxyz" size="40"><br><br>
+    language: <input id="lang" value="zh-tw"><br><br>
+</div>
+
+<!-- 顯示完整 URL -->
+<div>
+    <b>產生的 URL：</b><br>
+    <a id="urlLink" href="#" target="_blank"></a>
+</div>
+
+<br>
+
+<button onclick="go()">使用此 URL 登入</button>
+
+<script>
+function buildUrl() {
+    const base = "http://localhost:12821/ecp/openapi/user/autologin";
+    const loginName = document.getElementById("loginName").value;
+    const token = document.getElementById("token").value;
+    const lang = document.getElementById("lang").value;
+
+    return `${base}?token=${encodeURIComponent(token)}&loginName=${encodeURIComponent(loginName)}&language=${encodeURIComponent(lang)}`;
+}
+
+function render() {
+    const url = buildUrl();
+    const link = document.getElementById("urlLink");
+    link.href = url;
+    link.textContent = url;
+}
+
+// 點擊按鈕 → 跳轉
+function go() {
+    window.location.href = buildUrl();
+}
+
+// 輸入時即時更新 URL
+document.getElementById("loginName").oninput = render;
+document.getElementById("token").oninput = render;
+document.getElementById("lang").oninput = render;
+
+// 初始化
+render();
+</script>
+
+</body>
+</html>

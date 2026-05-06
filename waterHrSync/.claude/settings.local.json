@@ -1,0 +1,10 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python:*)",
+      "Bash(mvn clean:*)",
+      "Read(//d D:/project/Ai3/台水/project/**)",
+      "Bash(python -c \"print\\(''hello''\\)\")"
+    ]
+  }
+}

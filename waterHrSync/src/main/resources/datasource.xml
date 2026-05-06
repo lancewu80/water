@@ -1,0 +1,63 @@
+<?xml version="1.0" encoding="UTF-8"?>
+
+<root>
+	<datasources>
+		<datasource>
+				<id>default</id>
+				<driver-class>com.microsoft.sqlserver.jdbc.SQLServerDriver</driver-class>
+				<url>jdbc:sqlserver://localhost:1433;DatabaseName=ecp_db;encrypt=true;trustServerCertificate=true;</url>
+				<user>ecp</user>
+				<password>csii1qaz@WSX</password>
+				<min-pool-size>3</min-pool-size>
+				<max-pool-size>100</max-pool-size>
+				<max-lifetime>-1</max-lifetime>
+				<max-idle-time>-1</max-idle-time>
+				<default-isolation-level>READ_UNCOMMITTED</default-isolation-level>
+				<readonly>false</readonly>
+				<translate-sql>true</translate-sql>
+				<encrypt-password>false</encrypt-password>
+		</datasource>
+		<datasource>
+			<id>km</id>
+			<driver-class>com.microsoft.sqlserver.jdbc.SQLServerDriver</driver-class>
+			<url>jdbc:sqlserver://localhost:1433;DatabaseName=ecp_db;encrypt=true;trustServerCertificate=true;</url>
+			<user>ecp</user>
+			<password>csii1qaz@WSX</password>
+			<min-pool-size>3</min-pool-size>
+			<max-pool-size>100</max-pool-size>
+			<max-lifetime>-1</max-lifetime>
+			<max-idle-time>-1</max-idle-time>
+			<default-isolation-level>READ_UNCOMMITTED</default-isolation-level>
+			<readonly>false</readonly>
+			<translate-sql>true</translate-sql>
+			<encrypt-password>false</encrypt-password>
+		</datasource>
+	</datasources>
+	<transaction-timeout>60</transaction-timeout>
+
+	<!--
+	  Production HR source datasource.
+	  Uncomment and configure when deploying to production where the HR
+	  source DB (KM_DEPT / KM_USER) lives on a separate SQL Server instance.
+	  After enabling, update HrSyncDaoImpl to call getExecutor("hrsource")
+	  for getHrUserList() and getItDeptList() instead of getExecutor("default").
+
+	<datasources>
+		<datasource>
+			<id>hrsource</id>
+			<driver-class>com.microsoft.sqlserver.jdbc.SQLServerDriver</driver-class>
+			<url>jdbc:sqlserver://HR_DB_HOST:1433;DatabaseName=HR_DB_NAME;encrypt=true;trustServerCertificate=true;</url>
+			<user>hr_user</user>
+			<password>hr_password</password>
+			<min-pool-size>2</min-pool-size>
+			<max-pool-size>20</max-pool-size>
+			<max-lifetime>-1</max-lifetime>
+			<max-idle-time>-1</max-idle-time>
+			<default-isolation-level>READ_UNCOMMITTED</default-isolation-level>
+			<readonly>true</readonly>
+			<translate-sql>true</translate-sql>
+			<encrypt-password>false</encrypt-password>
+		</datasource>
+	</datasources>
+	-->
+</root>

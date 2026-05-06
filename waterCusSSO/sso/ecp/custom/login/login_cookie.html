@@ -1,0 +1,40 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <title>SSO Cookie 測試</title>
+</head>
+<body>
+
+<h3>SSO Cookie 登入測試</h3>
+
+<div>
+    loginName: <input id="loginName" value="user1"><br><br>
+    token: <input id="token" value="abcdefghijklmnopqrstuvwxyz" size="40"><br><br>
+    language: <input id="lang" value="zh-tw"><br><br>
+</div>
+
+<button onclick="go()">設定 Cookie 並登入</button>
+
+<script>
+function go() {
+    const loginName = document.getElementById("loginName").value;
+    const token = document.getElementById("token").value;
+    const lang = document.getElementById("lang").value;
+
+    // 1. 設定 Cookie
+    // 注意：如果是開發環境 localhost，不需加 Domain
+    // path=/ 代表在此網域下的所有路徑都能讀取這個 Cookie
+    document.cookie = `PUBLIC_APP_USER_SSO_TOKEN=${encodeURIComponent(token)}; path=/; max-age=3600`;
+    
+    // 2. 產生跳轉網址 (此時網址就不需要帶 token 了，只需帶 loginName 或 lang)
+    const base = "http://localhost:12821/ecp/openapi/user/autologin";
+    const targetUrl = `${base}?loginName=${encodeURIComponent(loginName)}&language=${encodeURIComponent(lang)}`;
+
+    // 3. 執行跳轉
+    window.location.href = targetUrl;
+}
+</script>
+
+</body>
+</html>

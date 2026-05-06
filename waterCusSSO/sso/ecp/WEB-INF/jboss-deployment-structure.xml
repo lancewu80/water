@@ -1,0 +1,35 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!--
+	By default, JBoss's logging subsystem writes log to standalone/log. To
+	write log to extension/xxx/log, the logging subsystem should be excluded.
+-->
+<jboss-deployment-structure xmlns="urn:jboss:deployment-structure:1.3">
+    <deployment>
+        <exclude-subsystems>
+            <subsystem name="logging" />
+        </exclude-subsystems>
+
+        <exclusions>
+            <module name="com.fasterxml.jackson.datatype.jackson-datatype-jdk8" />
+            <module name="com.fasterxml.jackson.datatype.jackson-datatype-jsr310" />
+            <module name="com.fasterxml.jackson.core.jackson-core" />
+            <module name="com.fasterxml.jackson.core.jackson-annotations" />
+            <module name="com.fasterxml.jackson.core.jackson-databind" />
+            <module name="com.fasterxml.jackson.jaxrs.jackson-jaxrs-json-provider" />
+            <module name="org.jboss.resteasy.resteasy-jackson2-provider" />
+            <module name="org.jboss.resteasy.resteasy-jackson-provider" />
+        </exclusions>
+    </deployment>
+</jboss-deployment-structure>
+
+<!-- 
+<?xml version="1.0" encoding="UTF-8"?>  
+<jboss-deployment-structure>
+    <deployment>
+        <exclusions>
+            <module name="org.apache.log4j" />
+            <module name="org.slf4j" />
+        </exclusions>
+    </deployment>
+</jboss-deployment-structure>
+-->

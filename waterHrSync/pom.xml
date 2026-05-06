@@ -1,0 +1,88 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project xmlns="http://maven.apache.org/POM/4.0.0"
+         xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+         xsi:schemaLocation="http://maven.apache.org/POM/4.0.0 https://maven.apache.org/xsd/maven-4.0.0.xsd">
+    <modelVersion>4.0.0</modelVersion>
+
+    <groupId>com.ai3.ecp.cus</groupId>
+    <artifactId>waterHrSync</artifactId>
+    <version>1.0.0-SNAPSHOT</version>
+    <packaging>jar</packaging>
+
+    <name>waterHrSync</name>
+    <description>Chat message summary timer module for ECP/Quicksilver.</description>
+
+    <properties>
+        <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <maven.compiler.release>17</maven.compiler.release>
+        <ecp.lib.dir>C:/chainsea/ecp/apache-tomcat/webapps/ecp/WEB-INF/lib</ecp.lib.dir>
+    </properties>
+
+    <dependencies>
+        <!-- Platform jars are provided by ECP Tomcat runtime. -->
+        <dependency>
+            <groupId>com.jeedsoft</groupId>
+            <artifactId>quicksilver-module-main</artifactId>
+            <version>7.1.31.beta22</version>
+            <scope>system</scope>
+            <systemPath>${ecp.lib.dir}/quicksilver-module-main-7.1.31.beta22.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.chainsea</groupId>
+            <artifactId>ecp-module-main</artifactId>
+            <version>8.5.02.36</version>
+            <scope>system</scope>
+            <systemPath>${ecp.lib.dir}/ecp-module-main-8.5.02.36.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.jeedsoft</groupId>
+            <artifactId>quicksilver-lib-advanced</artifactId>
+            <version>7.1.31.beta22</version>
+            <scope>system</scope>
+            <systemPath>${ecp.lib.dir}/quicksilver-lib-advanced-7.1.31.beta22.jar</systemPath>
+        </dependency>
+        <dependency>
+            <groupId>com.jeedsoft</groupId>
+            <artifactId>quicksilver-lib-basic</artifactId>
+            <version>7.1.31.beta22</version>
+            <scope>system</scope>
+            <systemPath>${ecp.lib.dir}/quicksilver-lib-basic-7.1.31.beta22.jar</systemPath>
+        </dependency>
+
+        <dependency>
+            <groupId>org.json</groupId>
+            <artifactId>json</artifactId>
+            <version>20240303</version>
+        </dependency>
+        <dependency>
+            <groupId>org.slf4j</groupId>
+            <artifactId>slf4j-api</artifactId>
+            <version>2.0.16</version>
+        </dependency>
+    </dependencies>
+
+    <build>
+        <finalName>${project.artifactId}</finalName>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-clean-plugin</artifactId>
+                <version>3.4.0</version>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-compiler-plugin</artifactId>
+                <version>3.13.0</version>
+                <configuration>
+                    <release>${maven.compiler.release}</release>
+                </configuration>
+            </plugin>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-jar-plugin</artifactId>
+                <version>3.4.2</version>
+            </plugin>
+        </plugins>
+    </build>
+</project>
+

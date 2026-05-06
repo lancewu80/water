@@ -1,0 +1,111 @@
+<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ECP 系統登入 - LDAP 驗證</title>
+    <style>
+        :root { --primary-color: #2c3e50; --error-color: #e74c3c; --success-color: #27ae60; }
+        body { font-family: "Microsoft JhengHei", sans-serif; background-color: #f4f7f6; display: flex; justify-content: center; align-items: center; height: 100vh; margin: 0; }
+        .login-container { background: white; padding: 40px; border-radius: 10px; box-shadow: 0 10px 25px rgba(0,0,0,0.1); width: 100%; max-width: 350px; }
+        h2 { text-align: center; color: var(--primary-color); margin-bottom: 30px; }
+        .input-group { margin-bottom: 20px; }
+        label { display: block; margin-bottom: 8px; font-weight: bold; color: #555; }
+        input { width: 100%; padding: 12px; border: 1px solid #ddd; border-radius: 5px; box-sizing: border-box; font-size: 16px; }
+        input:focus { border-color: #3498db; outline: none; }
+        button { width: 100%; padding: 12px; background-color: #3498db; color: white; border: none; border-radius: 5px; font-size: 16px; cursor: pointer; transition: background 0.3s; }
+        button:hover { background-color: #2980b9; }
+        #loading { display: none; text-align: center; margin-top: 15px; color: #666; }
+        #message { margin-top: 20px; padding: 12px; border-radius: 5px; display: none; font-size: 14px; text-align: center; }
+        .error { background-color: #fdecea; color: var(--error-color); border: 1px solid #fadbd8; }
+        .success { background-color: #eafaf1; color: var(--success-color); border: 1px solid #d4efdf; }
+    </style>
+</head>
+<body>
+
+<div class="login-container">
+    <h2>ECP 系統登入</h2>
+
+    <div class="input-group">
+        <label for="loginName">LDAP 帳號</label>
+        <input type="text" id="loginName" placeholder="請輸入帳號" required>
+    </div>
+
+    <div class="input-group">
+        <label for="password">密碼</label>
+        <input type="password" id="password" placeholder="請輸入密碼" required>
+    </div>
+
+    <button id="loginBtn" onclick="doLogin()">登入</button>
+
+    <div id="loading">驗證中，請稍候...</div>
+    <div id="message"></div>
+</div>
+
+<script>
+    async function doLogin() {
+        const loginName = document.getElementById('loginName').value;
+        const password = document.getElementById('password').value;
+        const btn = document.getElementById('loginBtn');
+        const loading = document.getElementById('loading');
+        const message = document.getElementById('message');
+
+        if (!loginName || !password) {
+            showMsg('請完整輸入帳號與密碼', 'error');
+            return;
+        }
+
+        // 介面鎖定
+        btn.disabled = true;
+        loading.style.display = 'block';
+        message.style.display = 'none';
+
+        // 設定 JSP 的完整網址
+        const JSP_URL = 'http://localhost:12821/ecp/custom/login/login.jsp';
+
+        try {
+            const response = await fetch(JSP_URL, {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({
+                    loginName: loginName,
+                    password: password
+                })
+            });
+
+            if (!response.ok) {
+                throw new Error('伺服器連線失敗 (HTTP ' + response.status + ')');
+            }
+
+            const data = await response.json();
+
+            if (data.success) {
+                showMsg('登入成功！', 'success');
+                // 成功後延遲跳轉
+                setTimeout(() => {
+                    // window.location.href = 'http://localhost:12821/ecp/index.jsp';
+                }, 1500);
+            } else {
+                showMsg('登入失敗：帳號或密碼錯誤', 'error');
+            }
+        } catch (err) {
+            console.error('Login Error:', err);
+            showMsg('發生錯誤：' + err.message + '<br>請確認是否遇到跨網域 (CORS) 問題。', 'error');
+        } finally {
+            btn.disabled = false;
+            loading.style.display = 'none';
+        }
+    }
+
+    function showMsg(text, type) {
+        const message = document.getElementById('message');
+        message.innerHTML = text;
+        message.className = type;
+        message.style.display = 'block';
+    }
+</script>
+
+</body>
+</html>
