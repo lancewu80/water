@@ -26,13 +26,14 @@ public interface HrSyncDao extends EntityDao<HrSyncModel>
 	DataSet<Record> getEcpUsersByDeptId(UUID deptId);
 	Record getEcpUserByEmployeeId(String employeeId);
 	void createEcpUser(UUID id, String name, String loginName, String email, UUID deptId, String employeeId);
-	void updateEcpUser(UUID id, String name, String loginName, String email, UUID deptId);
+	void updateEcpUser(UUID id, String name, String loginName, String email, UUID deptId, String employeeId);
 	void disableEcpUser(UUID id);
 
 	// TsAccount
 	Record getAccountByLoginName(String loginName);
+	Record getAccountByUserId(UUID userId);
 	void createAccount(UUID id, String name, String loginName, String password, String email);
-	void updateAccount(UUID id, String name, String loginName, String email);
+	void updateAccount(UUID id, String name, String loginName, String password, String email);
 	void disableAccount(UUID id);
 
 	// TsAccountIdentity

@@ -28,6 +28,8 @@ public class HrSyncDaoImpl extends EntityDaoImpl<HrSyncModel> implements HrSyncD
 				"SELECT EMPLOYEEID, DISPLAYNAME, EMAILADDRESS, LOGINID, DEPARTMENTID " +
 						"FROM v_KM_USER " +
 						"WHERE DEPARTMENTID LIKE '00%' " +
+						"AND LOGINID IS NOT NULL " +
+						"AND LTRIM(RTRIM(LOGINID)) <> '' " +
 						"AND EMPLOYEEID IS NOT NULL " +
 						"AND LTRIM(RTRIM(EMPLOYEEID)) <> ''",
 				new Object[]{});
@@ -37,7 +39,7 @@ public class HrSyncDaoImpl extends EntityDaoImpl<HrSyncModel> implements HrSyncD
 	public DataSet<Record> getHrDeptList()
 	{
 		return getExecutor("km").getDataSet(
-				"SELECT DEPARTMENTID, DISPLAYNAME, BELONGTO FROM v_KM_DEPT WHERE DEPARTMENTID LIKE '00%'",
+				"SELECT DEPARTMENTID, DISPLAYNAME, BELONGTO FROM v_KM_DEPT",
 				new Object[]{});
 	}
 
@@ -125,12 +127,12 @@ public class HrSyncDaoImpl extends EntityDaoImpl<HrSyncModel> implements HrSyncD
 	}
 
 	@Override
-	public void updateEcpUser(UUID id, String name, String loginName, String email, UUID deptId)
+	public void updateEcpUser(UUID id, String name, String loginName, String email, UUID deptId, String employeeId)
 	{
 		List<Object[]> args = new ArrayList<>();
-		args.add(new Object[]{name, loginName, email, deptId, id});
+		args.add(new Object[]{name, loginName, email, deptId, employeeId, id});
 		getExecutor("default").executeBatch(
-				"UPDATE TsUser SET FName=?, FLoginName=?, FEmail=?, FDepartmentId=?, FEnabled=1 WHERE FId=?",
+				"UPDATE TsUser SET FName=?, FLoginName=?, FEmail=?, FDepartmentId=?, FDID=?, FEnabled=1 WHERE FId=?",
 				args);
 	}
 
@@ -156,6 +158,18 @@ public class HrSyncDaoImpl extends EntityDaoImpl<HrSyncModel> implements HrSyncD
 	}
 
 	@Override
+	public Record getAccountByUserId(UUID userId)
+	{
+		DataSet<Record> ds = getExecutor("default").getDataSet(
+				"SELECT A.FId, A.FName, A.FLoginName, A.FEmail, A.FEnabled " +
+						"FROM TsAccount A " +
+						"INNER JOIN TsAccountIdentity AI ON AI.FAccountId = A.FId " +
+						"WHERE AI.FEntityId = ? ",
+				new Object[]{userId});
+		return ds.isEmpty() ? null : ds.iterator().next();
+	}
+
+	@Override
 	public void createAccount(UUID id, String name, String loginName, String password, String email)
 	{
 		List<Object[]> args = new ArrayList<>();
@@ -166,12 +180,14 @@ public class HrSyncDaoImpl extends EntityDaoImpl<HrSyncModel> implements HrSyncD
 	}
 
 	@Override
-	public void updateAccount(UUID id, String name, String loginName, String email)
+	public void updateAccount(UUID id, String name, String loginName, String password, String email)
 	{
 		List<Object[]> args = new ArrayList<>();
-		args.add(new Object[]{name, loginName, email, id});
+		args.add(new Object[]{name, loginName, password, email, id});
 		getExecutor("default").executeBatch(
-				"UPDATE TsAccount SET FName=?, FLoginName=?, FEmail=?, FEnabled=1 WHERE FId=?",
+				"UPDATE TsAccount SET FName=?, FLoginName=?, " +
+						"FPassword=CASE WHEN FPassword IS NULL OR LTRIM(RTRIM(FPassword))='' THEN ? ELSE FPassword END, " +
+						"FEmail=?, FEnabled=1 WHERE FId=?",
 				args);
 	}
 
@@ -212,7 +228,7 @@ public class HrSyncDaoImpl extends EntityDaoImpl<HrSyncModel> implements HrSyncD
 	public DataSet<Record> getDefaultRoles()
 	{
 		return getExecutor("default").getDataSet(
-				"SELECT FId, FName FROM TsRole WHERE FDefault=1",
+				"SELECT FId, FName FROM TsRole WHERE FName = '預設角色'",
 				new Object[]{});
 	}
 

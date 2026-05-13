@@ -55,17 +55,21 @@ public class HrSyncServiceImpl extends EntityServiceImpl<HrSyncModel> implements
 			return;
 		}
 
-		// Step 3: Build lookup map of existing ECP users (keyed by FDID / employee ID)
-		DataSet<Record> ecpUsers = HrSyncHome.getDao().getAllEcpUsers();
-		Map<String, Record> ecpUserMap = new HashMap<>();
-		for (Record user : ecpUsers) {
-			String did = user.getString("FDID");
-			if (did != null && !did.trim().isEmpty()) {
-				ecpUserMap.put(did.trim(), user);
+		// Step 3: Build HR lookup map by AD login ID (TsUser.FLoginName)
+		Map<String, Record> hrUserByLogin = new HashMap<>();
+		for (Record hrUser : hrUserList) {
+			String loginId = hrUser.getString("LOGINID");
+			if (loginId == null || loginId.trim().isEmpty()) {
+				continue;
 			}
+			String rawLogin = loginId.trim().toLowerCase();
+			hrUserByLogin.put(rawLogin, hrUser);
 		}
 
-		// Step 4: Collect IT department IDs for role assignment check
+		// Step 4: Load existing ECP users. They are manually created by water team.
+		DataSet<Record> ecpUsers = HrSyncHome.getDao().getAllEcpUsers();
+
+		// Step 5: Collect IT department IDs for role assignment check
 		Set<String> itDeptIds = new HashSet<>();
 		try {
 			DataSet<Record> itDepts = HrSyncHome.getDao().getItDeptList();
@@ -79,109 +83,68 @@ public class HrSyncServiceImpl extends EntityServiceImpl<HrSyncModel> implements
 			logger.warn("[syncHrData] 無法取得資訊處部門清單，IT 角色指派將略過: {}", e.getMessage());
 		}
 
-		// Step 5: Load roles (non-fatal — sync continues without role assignment if unavailable)
+		// Step 6: Load roles (non-fatal — sync continues without role assignment if unavailable)
 		DataSet<Record> defaultRoles = null;
-		DataSet<Record> sysAdminRoles = null;
 		try {
 			defaultRoles = HrSyncHome.getDao().getDefaultRoles();
-			sysAdminRoles = HrSyncHome.getDao().getSysAdminRoles();
 		} catch (Exception e) {
 			logger.warn("[syncHrData] 無法取得角色資料，角色指派將略過: {}", e.getMessage());
 		}
 
-		// Step 6: Process each HR user — create or update ECP user + account + roles
-		Set<String> hrEmployeeIds = new HashSet<>();
-		totalCount = hrUserList.size();
-
-		for (Record hrUser : hrUserList) {
-			String employeeId = hrUser.getString("EMPLOYEEID");
-			if (employeeId == null || employeeId.trim().isEmpty()) {
+		// Step 7: Update existing TsUser/TsAccount by AD login (manual account onboarding)
+		totalCount = ecpUsers.size();
+		for (Record ecpUser : ecpUsers) {
+			UUID userId = ecpUser.getUuid("FId");
+			Record account = HrSyncHome.getDao().getAccountByUserId(userId);
+			if (account == null) {
+				logger.debug("[syncHrData] Skip TsUser without mapped TsAccount, userId={}", userId);
 				continue;
 			}
-			employeeId = employeeId.trim();
-			hrEmployeeIds.add(employeeId);
 
+			String loginName = account.getString("FLoginName");
+			if (loginName == null || loginName.trim().isEmpty()) {
+				logger.debug("[syncHrData] Skip TsAccount without login name, userId={}, accountId={}", userId, account.getUuid("FId"));
+				continue;
+			}
+
+			String loginKey = loginName.trim().toLowerCase();
+			Record hrUser = hrUserByLogin.get(loginKey);
+			if (hrUser == null) {
+				logger.debug("[syncHrData] Login {} has no 00-department HR data, skip update", loginName);
+				continue;
+			}
+
+			String employeeId = hrUser.getString("EMPLOYEEID");
+			if (employeeId != null) {
+				employeeId = employeeId.trim();
+			}
 			String displayName = hrUser.getString("DISPLAYNAME");
 			String email = hrUser.getString("EMAILADDRESS");
-			String loginId = hrUser.getString("LOGINID");
 			String hrDeptId = hrUser.getString("DEPARTMENTID");
 
-			// Resolve user's ECP department FId; fall back to root if not mapped
 			UUID userDeptFId = (hrDeptId != null) ? hrDeptIdToEcpFId.get(hrDeptId.trim()) : null;
 			if (userDeptFId == null) {
 				userDeptFId = HrSyncHome.DEPT_ROOT_FID;
-				logger.warn("[syncHrData] 員工 {} 的部門 {} 無法對應，歸屬至根部門", employeeId, hrDeptId);
+				logger.warn("[syncHrData] AD {} 的部門 {} 無法對應，歸屬至根部門", loginName, hrDeptId);
 			}
 
 			try {
-				UUID userId;
-				Record ecpUser = ecpUserMap.get(employeeId);
+				HrSyncHome.getDao().updateEcpUser(userId, displayName, loginName.trim(), email, userDeptFId, employeeId);
 
-				if (ecpUser == null) {
-					// 名單存在，ECP 不存在 → 新增
-					userId = UUID.randomUUID();
-					HrSyncHome.getDao().createEcpUser(userId, displayName, loginId, email, userDeptFId, employeeId);
-					logger.debug("[syncHrData] Created user employeeId={}", employeeId);
+				HrSyncHome.getDao().updateAccount(account.getUuid("FId"), displayName, loginName.trim(),
+						HrSyncHome.DEFAULT_ACCOUNT_PASSWORD, email);
+				ensureAccountIdentity(account.getUuid("FId"), displayName, userId);
 
-					UUID accountId = UUID.randomUUID();
-					HrSyncHome.getDao().createAccount(accountId, displayName, loginId, HrSyncHome.DEFAULT_ACCOUNT_PASSWORD, email);
-					ensureAccountIdentity(accountId, displayName, userId);
-				} else {
-					// 名單存在，ECP 存在 → 更新
-					userId = ecpUser.getUuid("FId");
-					HrSyncHome.getDao().updateEcpUser(userId, displayName, loginId, email, userDeptFId);
-					logger.debug("[syncHrData] Updated user employeeId={}", employeeId);
-
-					Record account = (loginId != null) ? HrSyncHome.getDao().getAccountByLoginName(loginId) : null;
-					if (account == null) {
-						UUID accountId = UUID.randomUUID();
-						HrSyncHome.getDao().createAccount(accountId, displayName, loginId, HrSyncHome.DEFAULT_ACCOUNT_PASSWORD, email);
-						ensureAccountIdentity(accountId, displayName, userId);
-					} else {
-						HrSyncHome.getDao().updateAccount(account.getUuid("FId"), displayName, loginId, email);
-						ensureAccountIdentity(account.getUuid("FId"), displayName, userId);
-					}
-				}
-
-				// Role assignment: default role always; sysAdmin role for IT personnel
-				boolean isItPerson = hrDeptId != null && itDeptIds.contains(hrDeptId.trim());
-				assignRoles(userId, defaultRoles, sysAdminRoles, isItPerson);
+				assignRoles(userId, defaultRoles);
 
 				successCount++;
 			} catch (Exception e) {
-				logger.error("[syncHrData] 執行時間: {}, 功能名稱: syncHrData, 錯誤訊息: 處理人員 {} 失敗 — {}", startTime, employeeId, e.getMessage(), e);
+				logger.error("[syncHrData] 執行時間: {}, 功能名稱: syncHrData, 錯誤訊息: 同步 AD {} / 員工 {} 失敗 — {}",
+						startTime, loginName, employeeId, e.getMessage(), e);
 				failCount++;
 			}
 		}
 
-		// Step 7: Disable ECP users absent from HR list — skip customer service staff (FIsServices=1)
-		for (Map.Entry<String, Record> entry : ecpUserMap.entrySet()) {
-			String empId = entry.getKey();
-			if (!hrEmployeeIds.contains(empId)) {
-				Record ecpUser = entry.getValue();
-				String isServicesVal = ecpUser.getString("FIsServices");
-				boolean isServices = "1".equals(isServicesVal) || "true".equalsIgnoreCase(isServicesVal);
-				if (isServices) {
-					logger.debug("[syncHrData] Skipped disable for customer service staff employeeId={}", empId);
-					continue;
-				}
-				try {
-					UUID userId = ecpUser.getUuid("FId");
-					HrSyncHome.getDao().disableEcpUser(userId);
-
-					String loginName = ecpUser.getString("FLoginName");
-					if (loginName != null && !loginName.trim().isEmpty()) {
-						Record account = HrSyncHome.getDao().getAccountByLoginName(loginName);
-						if (account != null) {
-							HrSyncHome.getDao().disableAccount(account.getUuid("FId"));
-						}
-					}
-					logger.debug("[syncHrData] Disabled user not in HR list, employeeId={}", empId);
-				} catch (Exception e) {
-					logger.error("[syncHrData] 執行時間: {}, 功能名稱: syncHrData, 錯誤訊息: 停用人員 {} 失敗 — {}", startTime, empId, e.getMessage(), e);
-				}
-			}
-		}
 
 		Date endTime = new Date();
 		long processTime = (endTime.getTime() - startTime.getTime()) / 1000L;
@@ -240,6 +203,8 @@ public class HrSyncServiceImpl extends EntityServiceImpl<HrSyncModel> implements
 					parentEcpId = HrSyncHome.DEPT_ROOT_FID;
 				} else if (hrToEcpDeptId.containsKey(belongTo.trim())) {
 					parentEcpId = hrToEcpDeptId.get(belongTo.trim());
+				} else if (!hrDeptMap.containsKey(belongTo.trim())) {
+					parentEcpId = HrSyncHome.DEPT_ROOT_FID;
 				} else {
 					continue; // parent not yet processed — retry next iteration
 				}
@@ -277,7 +242,7 @@ public class HrSyncServiceImpl extends EntityServiceImpl<HrSyncModel> implements
 		}
 	}
 
-	private void assignRoles(UUID userId, DataSet<Record> defaultRoles, DataSet<Record> sysAdminRoles, boolean isItPerson)
+	private void assignRoles(UUID userId, DataSet<Record> defaultRoles)
 	{
 		if (defaultRoles != null) {
 			for (Record role : defaultRoles) {
@@ -287,13 +252,6 @@ public class HrSyncServiceImpl extends EntityServiceImpl<HrSyncModel> implements
 				}
 			}
 		}
-		if (isItPerson && sysAdminRoles != null) {
-			for (Record role : sysAdminRoles) {
-				UUID roleId = role.getUuid("FId");
-				if (!HrSyncHome.getDao().hasRoleAssigned(roleId, userId)) {
-					HrSyncHome.getDao().assignRoleToUser(roleId, userId);
-				}
-			}
-		}
 	}
+
 }
