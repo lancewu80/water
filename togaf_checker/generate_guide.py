@@ -212,7 +212,7 @@ def _cover(doc):
     for _ in range(2):
         _p(doc)
 
-    _p(doc, f'文件版本：1.0.2        生成時間：{TODAY}',
+    _p(doc, f'文件版本：1.0.3        生成時間：{TODAY}',
        size=11, color=C_GRAY, align=WD_ALIGN_PARAGRAPH.CENTER)
     _p(doc, '工具位置：<專案根目錄>/togaf_checker/',
        size=11, color=C_GRAY, align=WD_ALIGN_PARAGRAPH.CENTER)
@@ -897,6 +897,137 @@ def _ch5_design(doc):
     _numbered(doc, '（可選）重新產生本使用者指南：python generate_guide.py')
 
     _p(doc)
+
+    # ── 5.8 Score calculation ─────────────────────────────────────────────────
+    _h(doc, '5.8  合規分數計算方式', 2)
+    _p(doc,
+       '每個準則的合規分數（0–100%）反映該準則違規問題的嚴重程度，'
+       '採用「嚴重度扣分制」，與掃描的程式碼行數完全無關。',
+       size=11)
+    _p(doc)
+
+    # Why NOT line-count
+    _h(doc, '5.8.1  為何不用「通過行數 / 掃描行數」？', 3)
+    _p(doc,
+       '直覺上「掃描 7994 行，只有 9 行有問題 → 99.9% ≈ 100%」看似合理，'
+       '但在合規報告中這是錯誤的：',
+       size=11)
+
+    tb_why = _tbl(doc, 3, 2, [5.5, 11])
+    _hdr(tb_why, ['問題', '說明'])
+    why_rows = [
+        ('分母膨脹效應',
+         '掃描行數愈多（大型專案），分數愈趨近 100%，與實際風險完全脫鉤。'
+         '一個有 100 個 HIGH 問題的大型專案可能比有 2 個 HIGH 問題的小型專案分數還高。'),
+        ('嚴重度不分',
+         '1 個 HIGH 和 1 個 LOW 在行數分母下扣的分完全相同，'
+         '無法反映兩者天差地遠的風險等級。'),
+    ]
+    for i, (a, b) in enumerate(why_rows, start=1):
+        _shd(tb_why.rows[i].cells[0], F_RED if i == 1 else F_AMBER)
+        _cell(tb_why.rows[i].cells[0], a, bold=True, color=C_WHITE, size=10)
+        _cell(tb_why.rows[i].cells[1], b, size=10)
+    _p(doc)
+
+    # Deduction formula
+    _h(doc, '5.8.2  扣分公式', 3)
+    _p(doc, '去重單位：(規則名稱 + 檔案路徑) 組合', size=11, bold=True)
+    _p(doc,
+       '同一個規則在同一個檔案的多行觸發，只算一次（修好這個檔案就解決了）。'
+       '但同一個規則出現在不同檔案，則每個檔案各算一次（每個地方都要修）。',
+       size=11)
+    _p(doc)
+
+    # Deduction table
+    tb_ded = _tbl(doc, 4, 4, [3.0, 3.5, 3.5, 6.5])
+    _hdr(tb_ded, ['嚴重度', '每個 (規則+檔案) 扣分', '單一準則扣分上限', '上限設計原因'])
+    ded_rows = [
+        ('HIGH',   '-20 分', '最多 -60 分（3 組合）',
+         '≥3 個 HIGH 組合已足夠反映「嚴重失守」；追加問題不再加深懲罰'),
+        ('MEDIUM', '-10 分', '最多 -40 分（4 組合）',
+         '中風險問題多時代表系統性問題，但不至於完全不合格'),
+        ('LOW',    ' -4 分', '最多 -20 分（5 組合）',
+         'LOW 問題（如缺 null 防禦）即使遍佈 26 個檔案，也不應讓分數歸零'),
+    ]
+    sev_fills = [F_RED, F_AMBER, F_BLUE]
+    for i, (sev, pts, cap, reason) in enumerate(ded_rows, start=1):
+        _shd(tb_ded.rows[i].cells[0], sev_fills[i - 1])
+        _cell(tb_ded.rows[i].cells[0], sev, bold=True, color=C_WHITE,
+              size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(tb_ded.rows[i].cells[1], pts, bold=True, size=10,
+              align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(tb_ded.rows[i].cells[2], cap, size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(tb_ded.rows[i].cells[3], reason, size=10)
+    _p(doc)
+
+    _code(doc,
+          'score = 100\n'
+          '      - min(HIGH   unique (rule+file) count × 20,  60)\n'
+          '      - min(MEDIUM unique (rule+file) count × 10,  40)\n'
+          '      - min(LOW    unique (rule+file) count ×  4,  20)\n'
+          'score = max(0, score)   # 最低 0%'
+    )
+    _p(doc)
+
+    # Colour thresholds
+    _h(doc, '5.8.3  分數色彩閾值', 3)
+    tb_col = _tbl(doc, 4, 3, [3.5, 4.5, 8.5])
+    _hdr(tb_col, ['分數範圍', '顏色', '判讀'])
+    col_rows = [
+        ('80% – 100%', '綠色  ✅', '合格：問題數量與嚴重度在可接受範圍內'),
+        ('60% – 79%',  '橙色  ⚠️', '需改善：有中風險或多個低風險問題，建議本版本修正'),
+        ('0% – 59%',   '紅色  ❌', '不合格：存在高風險問題，應列為優先修正項目'),
+    ]
+    col_fills = [F_GREEN, F_AMBER, F_RED]
+    for i, (rng, color, desc) in enumerate(col_rows, start=1):
+        _shd(tb_col.rows[i].cells[0], col_fills[i - 1])
+        _cell(tb_col.rows[i].cells[0], rng, bold=True, color=C_WHITE,
+              size=10, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(tb_col.rows[i].cells[1], color, bold=True, size=10,
+              align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(tb_col.rows[i].cells[2], desc, size=10)
+    _p(doc)
+
+    # Worked example — P15
+    _h(doc, '5.8.4  實際範例：P15 Data Security', 3)
+    _p(doc, '以下為本工具掃描台水專案後，P15 的實際計算過程：', size=11)
+    _p(doc)
+
+    tb_ex = _tbl(doc, 8, 5, [1.8, 5.2, 2.5, 2.5, 2.0])
+    _hdr(tb_ex, ['嚴重度', '(規則名稱 + 檔案)', '行號', '去重後算幾次', '扣分'])
+    ex_rows = [
+        ('HIGH',   'isTokenRequired=false  ×  SSOLoginLogApiImpl.java',   '29, 39', '1 次（同檔案）', '-20'),
+        ('HIGH',   'isTokenRequired=false  ×  ChatMessageSummaryApiImpl.java', '17',  '1 次',          '-20'),
+        ('HIGH',   '硬編碼密碼/金鑰  ×  autologin.jsp',                   '32,78,106','1 次（同檔案）','-20'),
+        ('MEDIUM', 'CORS 萬用字元 (*)  ×  login.jsp',                     '8',      '1 次',          '-10'),
+        ('MEDIUM', '缺授權框架  ×  (全域)',                                '-',      '1 次',          '-10'),
+        ('MEDIUM', '缺加密實作  ×  (全域)',                                '-',      '1 次',          '-10'),
+    ]
+    ex_fills = [F_RED, F_RED, F_RED, F_AMBER, F_AMBER, F_AMBER]
+    for i, (sev, item, lines, count, pts) in enumerate(ex_rows, start=1):
+        _shd(tb_ex.rows[i].cells[0], ex_fills[i - 1])
+        _cell(tb_ex.rows[i].cells[0], sev, bold=True, color=C_WHITE,
+              size=9, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(tb_ex.rows[i].cells[1], item, size=9)
+        _cell(tb_ex.rows[i].cells[2], lines, size=9, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(tb_ex.rows[i].cells[3], count, size=9, align=WD_ALIGN_PARAGRAPH.CENTER)
+        _cell(tb_ex.rows[i].cells[4], pts, bold=True, size=10,
+              align=WD_ALIGN_PARAGRAPH.CENTER)
+    _p(doc)
+
+    _code(doc,
+          'HIGH   扣分 = min(3 × 20, 60) = min(60, 60) = 60\n'
+          'MEDIUM 扣分 = min(3 × 10, 40) = min(30, 40) = 30\n'
+          'LOW    扣分 = 0\n'
+          '\n'
+          'P15 合規分數 = 100 - 60 - 30 - 0 = 10%  🔴 不合格'
+    )
+    _p(doc)
+    _p(doc,
+       '注意：掃描行數（7,994 行）完全不影響此計算。',
+       size=10, italic=True, color=C_LGRAY)
+
+    _p(doc)
     _page_break(doc)
 
 
@@ -969,11 +1100,14 @@ def _ch7_faq(doc):
          '是的。靜態 regex 掃描比執行程式快得多。32 個 .java/.jsp 檔案大約 '
          '3–10 秒，即使是數百個檔案也通常在 30 秒內完成。\n'
          '掃描的檔案數量會記錄在報告封面（「掃描檔案總數：XX 個」）。'),
-        ('Q2：每次報告分數都是 100%，但有 FAIL 準則，這正確嗎？',
-         '正確。分數計算基礎是「行級別檢查通過數 / 行級別檢查總數」。\n'
-         '若一個檔案有 500 行，而只有 2 行觸發 HIGH 規則，分數仍達 99.6% ≈ 100%。\n'
-         '準則的 Pass/Fail 判斷取決於「是否有 HIGH 或 MEDIUM 等級的 finding」，\n'
-         '這才是需要關注的指標，而非分數百分比本身。'),
+        ('Q2：合規分數是怎麼算的？和「掃描行數」有關嗎？',
+         '無關。合規分數採「嚴重度扣分制」，以「規則名稱 + 檔案路徑」為去重單位：\n'
+         '  HIGH   每個唯一 (規則+檔案) 組合 -20 分，上限 -60\n'
+         '  MEDIUM 每個唯一 (規則+檔案) 組合 -10 分，上限 -40\n'
+         '  LOW    每個唯一 (規則+檔案) 組合  -4 分，上限 -20\n'
+         '\n'
+         '同一個規則在同一個檔案出現多行，只扣一次；出現在不同檔案則各扣一次。\n'
+         '詳細說明與計算範例請見 5.8 節。'),
         ('Q3：排程工作設定後為何沒有在 10:00 執行？',
          '常見原因：\n'
          '1. 電腦在 10:00 時關機或睡眠 → 啟用「StartWhenAvailable」（已在 PS1 設定）\n'
@@ -1033,7 +1167,7 @@ def _ch7_faq(doc):
 
 def _ch8_changelog(doc):
     _h(doc, '8. 版本紀錄', 1)
-    tb = _tbl(doc, 5, 4, [2, 3, 5, 7])
+    tb = _tbl(doc, 6, 4, [2, 3, 5, 7])
     _hdr(tb, ['版本', '日期', '異動項目', '說明'])
     changes = [
         ('1.0.0', '2026-05-18',
@@ -1050,31 +1184,37 @@ def _ch8_changelog(doc):
          '新增 principles_config.py 作為原則定義的唯一真相來源；'
          'checker.py 與 report_builder.py 改從此檔匯入準則 metadata 與改善建議；'
          '新增使用者指南 5.7 維護指引章節'),
+        ('1.0.3', '2026-05-18',
+         '合規分數計算修正',
+         '分數改採嚴重度扣分制（(規則+檔案) 去重）；'
+         '修正原「行數百分比」永遠 100% 的問題；'
+         '新增使用者指南 5.8 分數計算說明章節'),
         ('（計劃）', '—',
          '—',
          '增加 XML / Groovy / Kotlin 檔案支援；增加 HTML 格式報告輸出'),
     ]
+    CURRENT_VER = '1.0.3'
     for i, (v, d, c, s) in enumerate(changes, start=1):
         if i % 2 == 0:
             for cell in tb.rows[i].cells:
                 _shd(cell, F_LGRAY)
-        # Highlight current version
-        if v == '1.0.2':
+        if v == CURRENT_VER:
             for cell in tb.rows[i].cells:
                 _shd(cell, F_TEAL)
+        is_cur = (v == CURRENT_VER)
         _cell(tb.rows[i].cells[0], v, bold=True, size=10, align=WD_ALIGN_PARAGRAPH.CENTER,
-              color=C_WHITE if v == '1.0.2' else C_BLACK)
+              color=C_WHITE if is_cur else C_BLACK)
         _cell(tb.rows[i].cells[1], d, size=10, align=WD_ALIGN_PARAGRAPH.CENTER,
-              color=C_WHITE if v == '1.0.2' else C_BLACK)
+              color=C_WHITE if is_cur else C_BLACK)
         _cell(tb.rows[i].cells[2], c, bold=True, size=10,
-              color=C_WHITE if v == '1.0.2' else C_BLACK)
+              color=C_WHITE if is_cur else C_BLACK)
         _cell(tb.rows[i].cells[3], s, size=10,
-              color=C_WHITE if v == '1.0.2' else C_BLACK)
+              color=C_WHITE if is_cur else C_BLACK)
 
     _p(doc)
     _p(doc,
        f'本文件由 generate_guide.py 自動產生  ·  '
-       f'工具版本 1.0.2  ·  生成時間：{TODAY}',
+       f'工具版本 1.0.3  ·  生成時間：{TODAY}',
        size=9, color=C_LGRAY, italic=True,
        align=WD_ALIGN_PARAGRAPH.CENTER)
 
@@ -1094,7 +1234,7 @@ def build_guide(out_path: str):
 
     _add_header_footer(
         doc,
-        f'TOGAF Checker 使用者指南  ·  v1.0.2  ·  {TODAY}'
+        f'TOGAF Checker 使用者指南  ·  v1.0.3  ·  {TODAY}'
     )
 
     _cover(doc)

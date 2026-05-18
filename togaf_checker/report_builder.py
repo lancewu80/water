@@ -309,7 +309,7 @@ def _build_summary(doc: Document, pr: ProjectCheckResult):
     # Summary table
     tbl = _make_table(doc, rows=len(pr.results) + 1, cols=6,
                       col_widths_cm=[1.5, 2.0, 3.5, 2.5, 2.2, 2.0])
-    _header_row(tbl, 0, ['優先度', '準則ID', '準則名稱', '掃描項目數', '發現問題數', '合規分數'])
+    _header_row(tbl, 0, ['優先度', '準則ID', '準則名稱', '掃描行數', '發現問題數', '合規分數'])
 
     for i, r in enumerate(pr.results, start=1):
         row = tbl.rows[i]
@@ -348,9 +348,11 @@ def _build_summary(doc: Document, pr: ProjectCheckResult):
     legend = doc.add_paragraph()
     legend.add_run('說明：').bold = True
     legend.add_run(
-        ' 優先度「最高(🔴)」為 TOGAF 核心安全與互通性準則；'
-        '「高(🟠)」為架構品質準則。'
+        ' 優先度「最高(🔴)」為 TOGAF 核心安全與互通性準則；「高(🟠)」為架構品質準則。'
         '合規分數 ≥80% 為綠色（合格），60-79% 為橙色（需改善），<60% 為紅色（不合格）。'
+        '掃描行數為工具實際逐行比對的次數，僅供參考；'
+        '合規分數採嚴重度扣分制：以「規則＋檔案」為單位，同一問題在同一檔案多行只扣一次，'
+        '出現在不同檔案則各扣一次（HIGH -20 / MEDIUM -10 / LOW -4），與掃描行數無關。'
     )
     _page_break(doc)
 
@@ -377,7 +379,7 @@ def _build_principle_section(doc: Document, r: PrincipleResult, section_no: int,
     _cell_para(row.cells[1], status, bold=True, color=C_WHITE,
                align=WD_ALIGN_PARAGRAPH.CENTER)
 
-    _cell_para(row.cells[2], f'掃描項目：{r.checks_run}  通過：{r.checks_passed}',
+    _cell_para(row.cells[2], f'掃描行數：{r.checks_run}',
                align=WD_ALIGN_PARAGRAPH.CENTER)
     _set_cell_fill(row.cells[3], _score_fill(r.score))
     _cell_para(row.cells[3], _score_bar_text(r.score), bold=True, color=C_WHITE,

@@ -38,7 +38,7 @@ class PrincipleResult:
     priority: str         # 最高 | 高
     findings: List[Finding] = field(default_factory=list)
     passed: bool = True   # turns False as soon as a HIGH/MEDIUM finding is added
-    checks_run: int = 0   # total individual checks performed
+    checks_run: int = 0   # informational: total lines/items scanned for this principle
     checks_passed: int = 0
 
     def add_finding(self, finding: Finding):
@@ -48,10 +48,44 @@ class PrincipleResult:
 
     @property
     def score(self) -> int:
-        """0-100 compliance score."""
-        if self.checks_run == 0:
+        """Severity-weighted compliance score (0–100).
+
+        Deduction unit: unique (rule, file) pair.
+        - Same rule appearing in 3 different files → 3 deductions (3 places to fix).
+        - Same rule appearing on lines 29 & 39 of the *same* file → 1 deduction
+          (fix the file once).
+
+        Per unique (rule, file) pair — keep the highest severity seen:
+            HIGH   → -20 pts
+            MEDIUM → -10 pts
+            LOW    → -4  pts
+        Score is clamped to [0, 100].
+
+        Why NOT use checks_passed/checks_run:
+            checks_run counts every regex comparison on every line (~thousands),
+            so even 9 HIGH findings against 7 994 line-checks gives 99.9% ≈ 100%,
+            which is meaningless.
+        """
+        if not self.findings:
             return 100
-        return round(self.checks_passed / self.checks_run * 100)
+        _rank = {'HIGH': 2, 'MEDIUM': 1, 'LOW': 0}
+        # Key = (rule_name, filepath) — same rule in same file counts once
+        worst: Dict[tuple, str] = {}
+        for f in self.findings:
+            key = (f.rule, f.filepath)
+            if _rank.get(f.severity, 0) >= _rank.get(worst.get(key, 'LOW'), 0):
+                worst[key] = f.severity
+
+        high_pts   = sum(20 for s in worst.values() if s == 'HIGH')
+        medium_pts = sum(10 for s in worst.values() if s == 'MEDIUM')
+        low_pts    = sum( 4 for s in worst.values() if s == 'LOW')
+
+        # Cap each severity tier so LOW findings alone can't force score to 0.
+        # HIGH  max -60  (≥3 violations fully red;  more ≠ worse score)
+        # MEDIUM max -40
+        # LOW   max -20  (≥5 low issues → amber zone floor, but not critical)
+        deduction = min(high_pts, 60) + min(medium_pts, 40) + min(low_pts, 20)
+        return max(0, 100 - deduction)
 
 
 @dataclass
