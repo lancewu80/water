@@ -1,0 +1,60 @@
+.web-card {
+  background: #fff;
+  border: 1px solid #e2e8f0;
+  border-radius: 12px;
+  padding: 1rem 1.25rem;
+  transition: box-shadow .15s, border-color .15s;
+}
+.web-card:hover {
+  box-shadow: 0 4px 16px rgba(0,0,0,.08);
+  border-color: #bfdbfe;
+}
+
+.web-source-row {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  margin-bottom: .35rem;
+}
+.web-favicon {
+  display: flex;
+  align-items: center;
+  width: 16px;
+  height: 16px;
+}
+.web-domain {
+  font-size: .78rem;
+  color: #16a34a;
+  font-weight: 500;
+}
+
+.web-title {
+  display: block;
+  font-size: 1rem;
+  font-weight: 600;
+  color: #1a56db;
+  text-decoration: none;
+  line-height: 1.4;
+  margin-bottom: .25rem;
+  transition: color .15s;
+}
+.web-title:hover { color: #1e40af; text-decoration: underline; }
+
+.web-url {
+  font-size: .75rem;
+  color: #16a34a;
+  margin-bottom: .5rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+
+.web-summary {
+  font-size: .87rem;
+  color: #475569;
+  line-height: 1.55;
+  display: -webkit-box;
+  -webkit-line-clamp: 3;
+  -webkit-box-orient: vertical;
+  overflow: hidden;
+}
