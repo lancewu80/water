@@ -1,12 +1,16 @@
 """
 AI Agent Backend — Flask API
 工具：即時天氣 / 新聞搜尋 / 網路搜尋
-智慧判斷使用者意圖，自動呼叫對應工具
+
+模式 A  快速模式 /api/search  — 關鍵字規則引擎，毫秒級
+模式 B  AI 模式  /api/agent   — Ollama LLM (gemma4:e4b) 真正推理決策
 
 Geocoding：Nominatim (OpenStreetMap) — 原生支援中/英/日文，免費無需 API Key
 天氣資料：Open-Meteo — 免費無需 API Key
+搜尋：ddgs (DuckDuckGo) — 免費無需 API Key
 """
 
+import json
 import re
 import time
 import requests
@@ -16,6 +20,70 @@ from ddgs import DDGS
 
 app = Flask(__name__)
 CORS(app)
+
+# ── Ollama 設定 ────────────────────────────────────────────────
+OLLAMA_URL   = "http://localhost:11434/api/chat"
+OLLAMA_MODEL = "gemma4:e4b"
+
+# 工具定義（Ollama tool format）
+AGENT_TOOLS = [
+    {
+        "type": "function",
+        "function": {
+            "name": "get_weather",
+            "description": "查詢指定城市的即時天氣，包含溫度、體感、濕度、風速",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "city": {
+                        "type": "string",
+                        "description": "城市名稱，支援中文/英文/日文，例如：台北、東京、Paris"
+                    }
+                },
+                "required": ["city"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_news",
+            "description": "搜尋最新新聞，適用於新聞、頭條、時事等查詢",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "新聞搜尋關鍵字"
+                    },
+                    "lang": {
+                        "type": "string",
+                        "description": "語言：zh（繁體中文）、en（英文）、ja（日文），預設 zh",
+                        "enum": ["zh", "en", "ja"]
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    },
+    {
+        "type": "function",
+        "function": {
+            "name": "search_web",
+            "description": "搜尋網路上任何主題的資訊，適用於一般知識、產品、技術等查詢",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "query": {
+                        "type": "string",
+                        "description": "搜尋關鍵字"
+                    }
+                },
+                "required": ["query"]
+            }
+        }
+    }
+]
 
 # ── 天氣代碼（WMO code → 中文描述 + emoji）────────────────────
 WMO_CODE = {
@@ -54,10 +122,28 @@ NEWS_KW = [
     "ニュース", "速報",
 ]
 
+# ── 停用詞（查詞清理用） ──────────────────────────────────────
+STOPWORDS = [
+    "最近", "最新", "有哪些", "有什麼", "怎樣", "如何", "呢", "嗎", "啊",
+    "告訴我", "幫我", "請", "能否", "可以", "是什麼", "是啥",
+    "recent", "latest", "what", "which", "any", "can", "please",
+]
+
 
 # ══════════════════════════════════════════════════════════════
 #  意圖辨識 & 城市提取
 # ══════════════════════════════════════════════════════════════
+
+def clean_query(query: str) -> str:
+    """
+    清理查詢詞：移除停用詞，提升搜尋準確度
+    例如：「最近有哪些人工智慧新聞」→ 「人工智慧新聞」
+    """
+    result = query
+    for sw in STOPWORDS:
+        result = re.sub(re.escape(sw), "", result, flags=re.IGNORECASE).strip()
+    return result if result else query  # 如果清理後為空，返回原始查詢
+
 
 def detect_intent(query: str) -> str:
     q = query.lower()
@@ -117,7 +203,7 @@ def extract_city(query: str) -> str:
 
 @app.route("/api/search", methods=["POST"])
 def smart_search():
-    """智慧搜尋：自動判斷意圖，路由至對應工具"""
+    """⚡ 快速模式：關鍵字規則引擎，毫秒級回應"""
     data  = request.get_json(force=True)
     query = data.get("query", "").strip()
     lang  = data.get("lang", "zh")
@@ -126,13 +212,92 @@ def smart_search():
         return jsonify({"error": "請輸入搜尋內容"}), 400
 
     intent = detect_intent(query)
+    cleaned_query = clean_query(query)  # 清理查詞
 
     if intent == "weather":
         return _weather(extract_city(query))
     elif intent == "news":
-        return _news(query, lang)
+        return _news(cleaned_query, lang)  # 用清理後的查詞
     else:
-        return _web(query)
+        return _web(cleaned_query)  # 用清理後的查詞
+
+
+@app.route("/api/agent", methods=["POST"])
+def agent_search():
+    """🧠 AI 模式：Ollama LLM 推理決策，自動選工具與提取參數"""
+    data  = request.get_json(force=True)
+    query = data.get("query", "").strip()
+
+    if not query:
+        return jsonify({"error": "請輸入搜尋內容"}), 400
+
+    try:
+        # ── Step 1：送給 Ollama LLM，讓它決定呼叫哪個工具 ────────
+        resp = requests.post(
+            OLLAMA_URL,
+            json={
+                "model":    OLLAMA_MODEL,
+                "messages": [
+                    {
+                        "role":    "system",
+                        "content": (
+                            "你是一個智慧搜尋助手。"
+                            "根據使用者的問題，選擇最合適的工具並直接呼叫，不要自行回答問題。"
+                            "天氣類問題用 get_weather，新聞類用 search_news，其他用 search_web。"
+                            "重要：search_web 和 search_news 的 query 參數必須完全等於用戶輸入的原始查詢詞，不可修改、重新排序或優化。"
+                        )
+                    },
+                    {"role": "user", "content": query}
+                ],
+                "tools":  AGENT_TOOLS,
+                "stream": False,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        msg = resp.json()["message"]
+
+        tool_calls = msg.get("tool_calls")
+
+        # ── Step 2：LLM 沒呼叫工具 → fallback 到規則引擎 ─────────
+        if not tool_calls:
+            result = smart_search()                    # 呼叫快速模式
+            result_data = result.get_json()
+            result_data["llm_fallback"] = True        # 標記為 fallback
+            return jsonify(result_data)
+
+        # ── Step 3：執行 LLM 選定的工具 ──────────────────────────
+        tc       = tool_calls[0]
+        fn       = tc["function"]
+        name     = fn["name"]
+        args     = fn["arguments"]
+        if isinstance(args, str):
+            args = json.loads(args)
+
+        # 記錄 LLM 的決策，回傳給前端顯示
+        llm_decision = {"tool": name, "args": args}
+
+        if name == "get_weather":
+            result = _weather(args.get("city", query))
+        elif name == "search_news":
+            result = _news(args.get("query", query), args.get("lang", "zh"))
+        elif name == "search_web":
+            result = _web(args.get("query", query))
+        else:
+            return jsonify({"error": f"未知工具：{name}"}), 500
+
+        # 把 LLM 決策資訊注入回傳資料
+        result_data = result.get_json()
+        result_data["llm_decision"] = llm_decision
+        return jsonify(result_data)
+
+    except requests.exceptions.ConnectionError:
+        return jsonify({
+            "error": "⚠️ 無法連線 Ollama，請確認已執行 ollama serve",
+            "hint":  "可切換至「⚡ 快速模式」繼續使用"
+        }), 503
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
 
 
 @app.route("/api/weather")

@@ -41,6 +41,83 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   padding: 0 1rem;
 }
 
+/* ── Mode Toggle Row ───────────────────────────────────── */
+.mode-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: 1rem;
+  margin-bottom: 1rem;
+}
+
+/* ── Mode Toggle Button ────────────────────────────────── */
+.mode-toggle {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  padding: .6rem 1rem;
+  border-radius: 999px;
+  border: 2px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: .9rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all .25s ease;
+  box-shadow: 0 2px 8px rgba(0,0,0,.06);
+}
+
+.mode-toggle:hover {
+  border-color: var(--primary);
+  box-shadow: 0 4px 12px rgba(59,130,246,.15);
+}
+
+.mode-toggle.mode-fast {
+  border-color: #10b981;
+  background: color-mix(in srgb, #10b981 6%, transparent);
+}
+
+.mode-toggle.mode-fast:hover {
+  border-color: #059669;
+  background: color-mix(in srgb, #10b981 12%, transparent);
+}
+
+.mode-toggle.mode-ai {
+  border-color: #a855f7;
+  background: color-mix(in srgb, #a855f7 6%, transparent);
+}
+
+.mode-toggle.mode-ai:hover {
+  border-color: #9333ea;
+  background: color-mix(in srgb, #a855f7 12%, transparent);
+}
+
+.mode-icon {
+  font-size: 1.2rem;
+  display: inline-block;
+}
+
+.mode-label {
+  font-weight: 700;
+  letter-spacing: -.3px;
+}
+
+.mode-sub {
+  font-size: .75rem;
+  font-weight: 500;
+  opacity: .65;
+  display: block;
+  margin-top: -.15rem;
+}
+
+.mode-hint {
+  font-size: .8rem;
+  color: var(--text-muted);
+  padding: .4rem .8rem;
+  background: color-mix(in srgb, var(--primary) 8%, transparent);
+  border-radius: 999px;
+  border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
 /* ── Search Section ────────────────────────────────────── */
 .search-section {
   background: var(--card);
@@ -48,6 +125,12 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   box-shadow: var(--shadow-lg);
   padding: 1.5rem;
   margin-bottom: 1.5rem;
+}
+
+/* ── AI Mode Enhancements ──────────────────────────────── */
+.app.ai-mode {
+  --primary: #a855f7;
+  --primary-dark: #9333ea;
 }
 
 /* ── Intent Badge ───────────────────────────────────────── */
@@ -141,6 +224,53 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   border-top-color: var(--primary);
   border-radius: 50%;
   animation: spin .7s linear infinite;
+}
+
+.spinner-ai {
+  border-top-color: #a855f7;
+}
+
+/* ── LLM Decision Info ───────────────────────────────────── */
+.llm-decision {
+  background: color-mix(in srgb, #a855f7 8%, transparent);
+  border: 1px solid color-mix(in srgb, #a855f7 30%, transparent);
+  border-radius: var(--radius);
+  padding: 1rem 1.25rem;
+  margin-bottom: 1rem;
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+  font-size: .9rem;
+  color: var(--text);
+  animation: fadeIn .25s ease;
+}
+
+.llm-decision-icon {
+  font-size: 1.2rem;
+  margin-right: .2rem;
+}
+
+.llm-tool,
+.llm-args {
+  background: var(--bg);
+  border-radius: 6px;
+  padding: .3rem .6rem;
+  font-family: "Courier New", monospace;
+  font-size: .85rem;
+  color: #d97706;
+  border: 1px solid var(--border);
+  word-break: break-all;
+}
+
+.llm-tool {
+  color: #059669;
+  font-weight: 600;
+}
+
+.llm-args {
+  color: #3b82f6;
+  max-width: 100%;
 }
 
 /* ── Results Section ─────────────────────────────────────── */
