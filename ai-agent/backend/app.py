@@ -13,13 +13,38 @@ Geocoding：Nominatim (OpenStreetMap) — 原生支援中/英/日文，免費無
 import json
 import re
 import time
+import uuid
 import requests
+import logging
+import os
+from datetime import datetime
 from flask import Flask, jsonify, request
 from flask_cors import CORS
 from ddgs import DDGS
 
+# ── 日誌設定 ───────────────────────────────────────────────────────
+LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
+os.makedirs(LOG_DIR, exist_ok=True)
+LOG_FILE = os.path.join(LOG_DIR, f"ai-agent-{datetime.now().strftime('%Y%m%d')}.log")
+
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s | %(levelname)-8s | %(name)s | %(message)s',
+    datefmt='%H:%M:%S',
+    handlers=[
+        logging.FileHandler(LOG_FILE, encoding='utf-8'),
+        logging.StreamHandler()
+    ]
+)
+logger = logging.getLogger(__name__)
+
 app = Flask(__name__)
 CORS(app)
+
+# ── Session 對話記憶（in-memory）──────────────────────────────
+# sessions: { session_id: [ {role, content}, ... ] }
+sessions: dict[str, list] = {}
+MAX_HISTORY_MSGS = 20   # 最多保留 20 條（約 6-7 輪對話）
 
 # ── Ollama 設定 ────────────────────────────────────────────────
 OLLAMA_URL   = "http://localhost:11434/api/chat"
@@ -31,13 +56,18 @@ AGENT_TOOLS = [
         "type": "function",
         "function": {
             "name": "get_weather",
-            "description": "查詢指定城市的即時天氣，包含溫度、體感、濕度、風速",
+            "description": "查詢指定城市的天氣，支援即時（今天）或明天預報",
             "parameters": {
                 "type": "object",
                 "properties": {
                     "city": {
                         "type": "string",
                         "description": "城市名稱，支援中文/英文/日文，例如：台北、東京、Paris"
+                    },
+                    "date": {
+                        "type": "string",
+                        "description": "查詢日期：today（今天即時，預設）、tomorrow（明天）、week（未來7天）、10days（未來10天）",
+                        "enum": ["today", "tomorrow", "week", "10days"]
                     }
                 },
                 "required": ["city"]
@@ -115,6 +145,9 @@ WEATHER_KW = [
     "天氣", "氣溫", "溫度", "下雨", "晴天", "颱風", "濕度", "風速",
     "weather", "temperature", "rain", "sunny", "humidity", "wind", "forecast",
     "天気", "気温", "湿度", "風速", "雨", "晴れ",
+    # ── 時間相關（快速模式的天氣追問）
+    "明天", "後天", "一週", "7天", "七天", "10天", "十天", "週預報", "週間", "未來",
+    "tomorrow", "week", "days",
 ]
 NEWS_KW = [
     "新聞", "頭條", "熱門", "最新", "消息", "報導", "即時",
@@ -224,73 +257,239 @@ def smart_search():
 
 @app.route("/api/agent", methods=["POST"])
 def agent_search():
-    """🧠 AI 模式：Ollama LLM 推理決策，自動選工具與提取參數"""
-    data  = request.get_json(force=True)
-    query = data.get("query", "").strip()
+    """🧠 AI 模式：Ollama LLM 推理決策，自動選工具與提取參數（支援多輪對話記憶）"""
+    data       = request.get_json(force=True)
+    query      = data.get("query", "").strip()
+    session_id = data.get("session_id", "") or str(uuid.uuid4())
+    logger.info(f"\n{'='*80}")
+    logger.info(f"🧠 AI 模式搜尋 | session_id={session_id[:8]}... | query='{query}'")
 
     if not query:
         return jsonify({"error": "請輸入搜尋內容"}), 400
 
+    # ── 取出該 session 的對話歷史 ────────────────────────────────
+    history = sessions.get(session_id, [])
+
+    # ── 規則式追問解析（在 LLM 之前攔截，小模型保底）────────────
+    logger.info(f"📋 執行規則解析器...")
+    rule_result = _try_rule_followup(query, history)
+    if rule_result:
+        name, args = rule_result
+        logger.info(f"⚡ 執行規則結果 | tool={name} | args={json.dumps(args, ensure_ascii=False)}")
+        if name == "get_weather":
+            raw = _weather(args.get("city", query), args.get("date", "today"))
+        elif name == "search_news":
+            raw = _news(args.get("query", query), args.get("lang", "zh"))
+        elif name == "search_web":
+            raw = _web(args.get("query", query))
+        else:
+            raw = None
+
+        if raw is not None:
+            # Flask 工具函數有時回傳 (Response, status_code) tuple，需拆開
+            response_obj = raw[0] if isinstance(raw, tuple) else raw
+            status_code  = raw[1] if isinstance(raw, tuple) else 200
+
+            # 安全地提取 JSON 資料（處理 Response 物件與 dict）
+            if isinstance(response_obj, dict):
+                result_data = response_obj
+            elif hasattr(response_obj, 'get_json'):
+                result_data = response_obj.get_json()
+            else:
+                logger.error(f"❌ 未預期的回應型態: {type(response_obj)}")
+                return jsonify({"error": f"規則執行失敗：未預期的回應型態"}), 500
+
+            logger.debug(f"   ✅ 規則工具執行完成 | status={status_code} | result_type={result_data.get('type', 'unknown')}")
+            # 若工具本身回錯誤（如找不到城市），直接透傳給前端
+            if status_code >= 400 or result_data.get("error"):
+                logger.warning(f"   ⚠️ 規則工具返回錯誤: {result_data.get('error', 'unknown error')}")
+                return response_obj, status_code
+
+            tool_summary = _summarize_result(result_data)
+            args_hint    = json.dumps(args, ensure_ascii=False)
+            new_history  = history + [
+                {"role": "user",      "content": query},
+                {"role": "assistant", "content": f"[工具={name} 參數={args_hint}] {tool_summary}"},
+            ]
+            if len(new_history) > MAX_HISTORY_MSGS:
+                new_history = new_history[-MAX_HISTORY_MSGS:]
+            sessions[session_id] = new_history
+            result_data.update({
+                "llm_decision":  {"tool": name, "args": args},
+                "session_id":    session_id,
+                "history_count": len(new_history) // 2,
+                "rule_matched":  True,
+            })
+            return jsonify(result_data)
+
     try:
-        # ── Step 1：送給 Ollama LLM，讓它決定呼叫哪個工具 ────────
+        # ── Step 1：組合 messages（system + 歷史 + 本輪用戶輸入） ──
+        messages = [
+            {
+                "role":    "system",
+                "content": (
+                    "你是一個智慧搜尋助手，可以記住對話歷史。\n"
+                    "根據使用者問題（結合前文上下文）選擇工具：\n"
+                    "- 天氣預報 → get_weather\n"
+                    "- 明確要求新聞頭條 → search_news\n"
+                    "- 其他查詢 → search_web\n\n"
+                    "【代名詞解析規則】\n"
+                    "若用戶用「他」「她」「它」「這個人」「這部片」「這件事」等代名詞，"
+                    "必須從歷史對話找出對應的具體名稱，組合成完整查詢詞。\n"
+                    "例如：上一輪查「介紹賴清德」，用戶問「他的政策有哪些」"
+                    "→ query 應為「賴清德 政策」，呼叫 search_web。\n\n"
+                    "【追問規則（依上一輪工具）】\n"
+                    "上一輪是 get_weather：\n"
+                    "  - 「明天呢」→ 同城市 date=tomorrow\n"
+                    "  - 「一週/7天/這週」→ 同城市 date=week\n"
+                    "  - 「10天/十天/未來10天」→ 同城市 date=10days\n"
+                    "  - 「那XX呢/換XX城市」→ 新城市 date=today\n"
+                    "上一輪是 search_web 或 search_news：\n"
+                    "  - 用戶追問細節、用代名詞 → 解析出原始主題 + 新關鍵詞，呼叫 search_web\n"
+                    "  - 用戶明確說「新聞」→ 呼叫 search_news\n\n"
+                    "重要：query 參數直接用搜尋關鍵詞，不加語氣詞和問句。\n\n"
+                    "【語言規則】\n"
+                    "歷史對話中若出現日文城市（如福岡、東京、大阪）或日文內容，"
+                    "不代表後續查詢要使用日文。\n"
+                    "lang 參數應根據當前問題的語言決定：\n"
+                    "  - 用繁體中文問 → lang='zh'（預設）\n"
+                    "  - 明確要求英文新聞 → lang='en'\n"
+                    "  - 明確要求日文新聞 → lang='ja'\n"
+                    "沒有明確指定語言時，一律用 lang='zh'。"
+                )
+            },
+            *history,                                   # 注入歷史對話
+            {"role": "user", "content": query},
+        ]
+
         resp = requests.post(
             OLLAMA_URL,
-            json={
-                "model":    OLLAMA_MODEL,
-                "messages": [
-                    {
-                        "role":    "system",
-                        "content": (
-                            "你是一個智慧搜尋助手。"
-                            "根據使用者的問題，選擇最合適的工具並直接呼叫，不要自行回答問題。"
-                            "天氣類問題用 get_weather，新聞類用 search_news，其他用 search_web。"
-                            "重要：search_web 和 search_news 的 query 參數必須完全等於用戶輸入的原始查詢詞，不可修改、重新排序或優化。"
-                        )
-                    },
-                    {"role": "user", "content": query}
-                ],
-                "tools":  AGENT_TOOLS,
-                "stream": False,
-            },
-            timeout=30,
+            json={"model": OLLAMA_MODEL, "messages": messages,
+                  "tools": AGENT_TOOLS, "stream": False},
+            timeout=180,   # 3 分鐘（大型 prompt / 慢速機器需要較長推理時間）
         )
         resp.raise_for_status()
         msg = resp.json()["message"]
-
         tool_calls = msg.get("tool_calls")
 
-        # ── Step 2：LLM 沒呼叫工具 → fallback 到規則引擎 ─────────
+        # ── Step 2：LLM 沒呼叫工具 → fallback 到規則引擎 ──────────
         if not tool_calls:
-            result = smart_search()                    # 呼叫快速模式
-            result_data = result.get_json()
-            result_data["llm_fallback"] = True        # 標記為 fallback
+            result = smart_search()
+            # 安全地提取 JSON（處理 (Response, status) tuple）
+            if isinstance(result, tuple):
+                response_obj, status_code = result[0], result[1]
+                if isinstance(response_obj, dict):
+                    result_data = response_obj
+                elif hasattr(response_obj, 'get_json'):
+                    result_data = response_obj.get_json()
+                else:
+                    logger.error(f"❌ Fallback 失敗：未預期的回應型態 {type(response_obj)}")
+                    return jsonify({"error": "Fallback 處理失敗"}), 500
+                if status_code >= 400:
+                    return result
+            else:
+                result_data = result.get_json() if hasattr(result, 'get_json') else result
+
+            # 重要：fallback 也要寫入 session 歷史，否則追問（如「10天呢」）會遺失上下文
+            result_type = result_data.get("type")
+            if result_type == "weather":
+                fallback_tool = "get_weather"
+                fallback_args = {
+                    "city": result_data.get("city") or extract_city(query),
+                    "date": "today",
+                }
+            elif result_type == "news":
+                fallback_tool = "search_news"
+                fallback_args = {
+                    "query": result_data.get("query", query),
+                    "lang": "zh",
+                }
+            else:
+                fallback_tool = "search_web"
+                fallback_args = {
+                    "query": result_data.get("query", query),
+                }
+
+            tool_summary = _summarize_result(result_data)
+            args_hint = json.dumps(fallback_args, ensure_ascii=False)
+            new_history = history + [
+                {"role": "user", "content": query},
+                {"role": "assistant", "content": f"[工具={fallback_tool} 參數={args_hint}] {tool_summary}"},
+            ]
+            if len(new_history) > MAX_HISTORY_MSGS:
+                new_history = new_history[-MAX_HISTORY_MSGS:]
+            sessions[session_id] = new_history
+
+            result_data.update({"llm_fallback": True, "session_id": session_id,
+                                 "history_count": len(new_history) // 2})
             return jsonify(result_data)
 
-        # ── Step 3：執行 LLM 選定的工具 ──────────────────────────
-        tc       = tool_calls[0]
-        fn       = tc["function"]
-        name     = fn["name"]
-        args     = fn["arguments"]
+        # ── Step 3：執行 LLM 選定的工具 ────────────────────────────
+        tc   = tool_calls[0]
+        fn   = tc["function"]
+        name = fn["name"]
+        args = fn["arguments"]
         if isinstance(args, str):
             args = json.loads(args)
 
-        # 記錄 LLM 的決策，回傳給前端顯示
+        logger.info(f"🤖 LLM 決策 | tool={name} | args={json.dumps(args, ensure_ascii=False)}")
         llm_decision = {"tool": name, "args": args}
 
         if name == "get_weather":
-            result = _weather(args.get("city", query))
+            raw = _weather(args.get("city", query), args.get("date", "today"))
         elif name == "search_news":
-            result = _news(args.get("query", query), args.get("lang", "zh"))
+            raw = _news(args.get("query", query), args.get("lang", "zh"))
         elif name == "search_web":
-            result = _web(args.get("query", query))
+            raw = _web(args.get("query", query))
         else:
             return jsonify({"error": f"未知工具：{name}"}), 500
 
-        # 把 LLM 決策資訊注入回傳資料
-        result_data = result.get_json()
-        result_data["llm_decision"] = llm_decision
+        # 拆 Flask tuple return
+        response_obj = raw[0] if isinstance(raw, tuple) else raw
+        status_code  = raw[1] if isinstance(raw, tuple) else 200
+
+        # 安全地提取 JSON 資料（處理 Response 物件與 dict）
+        if isinstance(response_obj, dict):
+            result_data = response_obj
+        elif hasattr(response_obj, 'get_json'):
+            result_data = response_obj.get_json()
+        else:
+            logger.error(f"❌ 未預期的回應型態: {type(response_obj)}")
+            return jsonify({"error": f"LLM 工具執行失敗：未預期的回應型態"}), 500
+
+        if status_code >= 400 or result_data.get("error"):
+            return response_obj, status_code
+
+        # ── Step 4：把本輪對話寫入 session 歷史 ────────────────────
+        # 使用純文字 user/assistant 格式（避免 Ollama 不支援 tool_calls replay）
+        tool_summary = _summarize_result(result_data)
+
+        # 歷史摘要明確記錄工具名稱與關鍵參數，方便 LLM 追問時參考
+        args_hint = json.dumps(args, ensure_ascii=False)
+        history = history + [
+            {"role": "user",      "content": query},
+            {"role": "assistant", "content": f"[工具={name} 參數={args_hint}] {tool_summary}"},
+        ]
+
+        # 超過上限時，保留最新的 N 條（每輪 2 條）
+        if len(history) > MAX_HISTORY_MSGS:
+            history = history[-MAX_HISTORY_MSGS:]
+
+        sessions[session_id] = history
+
+        # ── Step 5：回傳結果（附帶 session 資訊）────────────────────
+        result_data.update({
+            "llm_decision":  llm_decision,
+            "session_id":    session_id,
+            "history_count": len(history) // 2,   # 幾輪對話
+        })
         return jsonify(result_data)
 
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "error": "⏱️ Ollama 推理逾時（超過 3 分鐘），模型可能負載過高",
+            "hint":  "請稍後再試，或切換至「⚡ 快速模式」"
+        }), 504
     except requests.exceptions.ConnectionError:
         return jsonify({
             "error": "⚠️ 無法連線 Ollama，請確認已執行 ollama serve",
@@ -298,6 +497,193 @@ def agent_search():
         }), 503
     except Exception as e:
         return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/session/clear", methods=["POST"])
+def clear_session():
+    """清除指定 session 的對話歷史"""
+    data       = request.get_json(force=True)
+    session_id = data.get("session_id", "")
+    sessions.pop(session_id, None)
+    return jsonify({"ok": True, "session_id": session_id})
+
+
+def _last_mentioned_city(history: list) -> str:
+    """
+    從歷史中尋找最近一次提到過的城市名稱
+    用途：即使上次天氣查詢失敗，仍可在追問（如「10天呢」）時復用該城市
+    """
+    logger.debug(f"   搜尋歷史中的城市... 共 {len(history)} 條記錄")
+    for i in range(len(history) - 1, -1, -1):
+        msg = history[i]
+        if msg.get("role") == "assistant":
+            content = msg.get("content", "")
+            logger.debug(f"   檢查 history[{i}]: {content[:80]}...")
+            # 查找 get_weather 工具的參數
+            m = re.match(r'\[工具=get_weather\s+參數=(\{.*?\})', content)
+            if m:
+                try:
+                    args = json.loads(m.group(1))
+                    if args.get("city"):
+                        city = args["city"]
+                        logger.debug(f"   ✅ 找到城市: '{city}' (from history[{i}])")
+                        return city
+                except Exception as e:
+                    logger.debug(f"   ❌ JSON 解析失敗: {e}")
+    logger.debug(f"   ❌ 歷史中未找到城市")
+    return ""
+
+
+def _last_turn(history: list) -> tuple[str, dict, str]:
+    """
+    從歷史中取出最近一次工具呼叫：(tool_name, tool_args, user_query)
+    同時回傳對應的使用者原始問句，供實體名稱提取使用。
+    """
+    for i in range(len(history) - 1, -1, -1):
+        msg = history[i]
+        if msg.get("role") == "assistant":
+            m = re.match(r'\[工具=(\w+)\s+參數=(\{.*?\})', msg.get("content", ""))
+            if m:
+                try:
+                    tool = m.group(1)
+                    args = json.loads(m.group(2))
+                    # 取前一條（對應的使用者問句）
+                    user_q = ""
+                    if i > 0 and history[i - 1].get("role") == "user":
+                        user_q = history[i - 1].get("content", "")
+                    return tool, args, user_q
+                except Exception:
+                    pass
+    return "", {}, ""
+
+
+# 追問模式：(正則, date 值)
+_WEATHER_FOLLOWUP = [
+    (re.compile(r"10天|十天|未來10天|未來十天"), "10days"),
+    (re.compile(r"一週|7天|七天|這週|本週|週預報"), "week"),
+    (re.compile(r"明天|tomorrow"),                "tomorrow"),
+    (re.compile(r"後天"),                          "tomorrow"),  # 近似
+    (re.compile(r"今天|today|現在"),               "today"),
+]
+
+# 代名詞模式
+_PRONOUN_RE = re.compile(r"^(他|她|它|這個人|這人|此人|這件事|這個|這部|那個)")
+
+# 查詢前綴動詞（提取實體名稱用）
+_QUERY_PREFIX_RE = re.compile(
+    r"^(介紹|告訴我|幫我查|搜尋|關於|查詢|說明|解釋|什麼是|誰是|怎麼|如何|是什麼|"
+    r"帶我了解|給我|找|查|看看)\s*"
+)
+# 查詢後綴功能詞（清理實體名稱尾部）
+_QUERY_SUFFIX_RE = re.compile(
+    r"\s*(介紹|說明|是誰|是什麼|相關|資訊|資料|的新聞|詳細|怎樣|怎麼樣)$"
+)
+
+
+def _try_rule_followup(query: str, history: list):
+    """
+    規則式追問解析器（LLM 之前攔截）
+    - 若上一輪是天氣查詢，且當前 query 包含時間追問模式 → 直接返回 (get_weather, args)
+    - 若 query 以代名詞開頭，且上一輪是網路/新聞查詢 → 用上一輪 query 補全搜尋詞
+    返回 (tool_name, args_dict) 或 None（交給 LLM 處理）
+    """
+    logger.debug(f"🔍 規則追問解析器開始 | query='{query}'")
+    if not history:
+        logger.debug("❌ 無歷史記錄，跳過規則")
+        return None
+
+    last_tool, last_args, last_user_query = _last_turn(history)
+    logger.debug(f"📋 歷史上下文 | last_tool={last_tool} | last_user_query='{last_user_query}')")
+
+    # ── 天氣追問（只攔截明確的「時間」追問，不攔截城市切換）────
+    # 檢查 query 是否包含時間追問模式（10天/明天/一週等）
+    weather_time_match = None
+    for pattern, date_val in _WEATHER_FOLLOWUP:
+        if pattern.search(query):
+            weather_time_match = date_val
+            break
+
+    if weather_time_match:
+        logger.info(f"✅ 天氣時間追問規則觸發 | weather_time_match={weather_time_match}")
+        # 額外保護：如果 query 含有非天氣意圖的詞，放行給 LLM
+        non_weather = re.search(r"介紹|新聞|搜尋|政策|資訊|是誰|什麼人|查詢|告訴", query)
+        if not non_weather:
+            # 優先用上一輪的城市（last_tool == "get_weather"）
+            # 如果上一輪不是天氣查詢，試著從歷史中尋找最近提過的城市
+            city = ""
+            logger.debug(f"   檢查上一輪工具: last_tool={last_tool}")
+            if last_tool == "get_weather":
+                city = last_args.get("city", "")
+                logger.debug(f"   上一輪是天氣查詢，取城市: '{city}'")
+            if not city:
+                logger.debug(f"   上一輪不是天氣查詢或無城市，查詢歷史...")
+                city = _last_mentioned_city(history)
+                logger.debug(f"   從歷史找到城市: '{city}'")
+            # 只有找到城市才觸發規則
+            if city:
+                logger.info(f"✅ 天氣追問規則返回 | city={city} | date={weather_time_match}")
+                return ("get_weather", {"city": city, "date": weather_time_match})
+            else:
+                logger.debug(f"   ❌ 找不到城市，放行給 LLM")
+
+    # ── 代名詞追問（網路 / 新聞搜尋）────────────────────────────
+    if last_tool in ("search_web", "search_news") and _PRONOUN_RE.match(query.strip()):
+        logger.info(f"✅ 代名詞追問規則觸發 | last_tool={last_tool}")
+        # ★ 關鍵：優先用使用者的原始問句來提取實體名稱，
+        #         而非 LLM 的搜尋詞（LLM 可能把「蔡英文」擴展成「蔡英文 賴清德 比較」）
+        entity_source = last_user_query or last_args.get("query", "")
+        logger.debug(f"📝 entity_source='{entity_source}' (from {'user_query' if last_user_query else 'search_args'})")
+
+        # Step 1：去前綴（「介紹蔡英文」→「蔡英文」）
+        entity = _QUERY_PREFIX_RE.sub("", entity_source).strip()
+        logger.debug(f"   去前綴: '{entity_source}' → '{entity}'")
+        # Step 2：去後綴（「蔡英文 介紹」→「蔡英文」）
+        entity = _QUERY_SUFFIX_RE.sub("", entity).strip()
+        logger.debug(f"   去後綴: '{entity}'")
+        # Step 3：fallback — 清空時保留原始來源
+        entity = entity or entity_source
+        logger.debug(f"   最終實體: '{entity}'")
+
+        if entity:
+            # 從當前 query 提取追問的主題詞
+            remainder = _PRONOUN_RE.sub("", query.strip()).strip()           # 去代名詞
+            topic     = re.sub(r"^的\s*", "", remainder).strip()             # 去開頭助詞「的」
+            topic     = re.sub(r"[呢嗎啊吧哦哈]+$", "", topic).strip()      # 去結尾語氣詞
+            logger.debug(f"   主題詞提取: '{query.strip()}' → '{topic}'")
+            # 組合：空格分隔 → DuckDuckGo 精準關鍵字（「蔡英文 政見」比「蔡英文的政見」更精確）
+            new_query = f"{entity} {topic}".strip() if topic else entity
+            logger.debug(f"   最終搜尋詞: '{new_query}'")
+            if new_query and new_query != query:
+                # ★ 不繼承 last_tool：上一輪可能是 search_news，但追問不一定需要新聞
+                #   → 依追問主題決定工具，避免工具類型不一致造成結果跟新 session 差很多
+                #   → lang 也固定 zh，避免繼承到歷史中的 ja/en
+                follow_tool = (
+                    "search_news"
+                    if re.search(r"新聞|頭條|報導|最新消息|時事", topic)
+                    else "search_web"
+                )
+                logger.info(f"✅ 代名詞規則返回 | tool={follow_tool} | query='{new_query}' | lang=zh")
+                logger.debug(f"   工具決策依據: topic='{topic}' → {'news' if follow_tool=='search_news' else 'web'}")
+                return (follow_tool, {"query": new_query, "lang": "zh"})
+
+    logger.debug("❌ 無規則匹配，交由 LLM 決策")
+    return None   # 不符合規則 → 交給 LLM
+
+
+def _summarize_result(data: dict) -> str:
+    """將工具結果轉為簡短文字，供 LLM 上下文使用"""
+    t = data.get("type")
+    if t == "weather":
+        return (f"{data.get('city')} 天氣：{data.get('condition')} {data.get('emoji')}，"
+                f"氣溫 {data.get('temperature')}°C，體感 {data.get('feels_like')}°C，"
+                f"濕度 {data.get('humidity')}%，風速 {data.get('wind_speed')} km/h")
+    elif t == "news":
+        titles = [r.get("title", "") for r in data.get("results", [])[:3]]
+        return f"新聞搜尋結果（前3筆）：" + "；".join(titles)
+    elif t == "web":
+        titles = [r.get("title", "") for r in data.get("results", [])[:3]]
+        return f"網路搜尋結果（前3筆）：" + "；".join(titles)
+    return json.dumps(data, ensure_ascii=False)[:300]
 
 
 @app.route("/api/weather")
@@ -361,55 +747,165 @@ def _geo_lookup(city: str) -> dict | None:
         return None
 
 
-def _weather(city: str):
-    """即時天氣：Nominatim geocoding → Open-Meteo 天氣"""
+def _weather(city: str, date: str = "today"):
+    """
+    天氣查詢：
+      date="today"    → 即時天氣（current）
+      date="tomorrow" → 明日預報（daily forecast index 1）
+    """
     try:
-        # Step 1：地理編碼（Nominatim 支援中英日文，自動解析）
         loc = _geo_lookup(city)
-
         if not loc:
+            return jsonify({"error": f"找不到地點「{city}」，請嘗試更完整的城市名稱"}), 404
+
+        lat, lon, name, country = loc["latitude"], loc["longitude"], loc["name"], loc["country"]
+
+        if date in ("week", "10days"):
+            # ── 多天預報：7 天或 10 天 ────────────────────────────────
+            days = 7 if date == "week" else 10
+            meteo_resp = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude":  lat, "longitude": lon,
+                    "daily": ("temperature_2m_max,temperature_2m_min,"
+                              "apparent_temperature_max,"
+                              "precipitation_sum,precipitation_probability_max,"
+                              "wind_speed_10m_max,weather_code"),
+                    "timezone":      "auto",
+                    "forecast_days": days,
+                },
+                timeout=10,
+            )
+            if not meteo_resp.ok:
+                return jsonify({"error": f"Open-Meteo 錯誤（HTTP {meteo_resp.status_code}）"}), 502
+            raw = meteo_resp.text.strip()
+            if not raw:
+                return jsonify({"error": "Open-Meteo 回傳空內容"}), 502
+
+            daily = meteo_resp.json().get("daily", {})
+            dates       = daily.get("time", [])
+            codes       = daily.get("weather_code", [])
+            temp_max    = daily.get("temperature_2m_max", [])
+            temp_min    = daily.get("temperature_2m_min", [])
+            feels_max   = daily.get("apparent_temperature_max", [])
+            precip      = daily.get("precipitation_sum", [])
+            precip_prob = daily.get("precipitation_probability_max", [])
+            wind        = daily.get("wind_speed_10m_max", [])
+
+            forecast = []
+            for i in range(len(dates)):
+                cond, emoji = WMO_CODE.get(codes[i] if i < len(codes) else 0, ("未知", "🌡️"))
+                forecast.append({
+                    "date":       dates[i],
+                    "condition":  cond,
+                    "emoji":      emoji,
+                    "temp_max":   temp_max[i]    if i < len(temp_max)    else None,
+                    "temp_min":   temp_min[i]    if i < len(temp_min)    else None,
+                    "feels_max":  feels_max[i]   if i < len(feels_max)   else None,
+                    "precip":     precip[i]      if i < len(precip)      else None,
+                    "precip_prob":precip_prob[i] if i < len(precip_prob) else None,
+                    "wind":       wind[i]        if i < len(wind)        else None,
+                })
+
             return jsonify({
-                "error": f"找不到地點「{city}」，請嘗試更完整的城市名稱"
-            }), 404
+                "type":       "weather",
+                "date_label": f"未來 {days} 天預報",
+                "city":       name,
+                "country":    country,
+                "forecast":   forecast,   # 前端判斷有此欄位時改用預報表格
+            })
 
-        lat     = loc["latitude"]
-        lon     = loc["longitude"]
-        name    = loc["name"]
-        country = loc["country"]
+        elif date == "tomorrow":
+            # ── 明天預報：用 daily 參數，取 index=1 ──────────────────
+            meteo_resp = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude":  lat, "longitude": lon,
+                    "daily":     ("temperature_2m_max,temperature_2m_min,"
+                                  "apparent_temperature_max,apparent_temperature_min,"
+                                  "precipitation_sum,wind_speed_10m_max,weather_code"),
+                    "timezone":      "auto",
+                    "forecast_days": 2,
+                },
+                timeout=10,
+            )
+            if not meteo_resp.ok:
+                return jsonify({"error": f"Open-Meteo 錯誤（HTTP {meteo_resp.status_code}）"}), 502
+            raw = meteo_resp.text.strip()
+            if not raw:
+                return jsonify({"error": "Open-Meteo 回傳空內容"}), 502
+            daily = meteo_resp.json().get("daily", {})
+            code             = daily.get("weather_code", [0, 0])[1]
+            condition, emoji = WMO_CODE.get(code, ("未知", "🌡️"))
+            forecast_date    = daily.get("time", ["", ""])[1]
+            temp_max         = daily.get("temperature_2m_max",         [None, None])[1]
+            temp_min         = daily.get("temperature_2m_min",         [None, None])[1]
+            feels_max        = daily.get("apparent_temperature_max",   [None, None])[1]
+            precip           = daily.get("precipitation_sum",          [None, None])[1]
+            wind             = daily.get("wind_speed_10m_max",         [None, None])[1]
 
-        # Step 2：Open-Meteo 取得即時天氣
-        w = requests.get(
-            "https://api.open-meteo.com/v1/forecast",
-            params={
-                "latitude":  lat,
-                "longitude": lon,
-                "current":   (
-                    "temperature_2m,apparent_temperature,"
-                    "relative_humidity_2m,wind_speed_10m,"
-                    "weather_code,precipitation"
-                ),
-                "timezone": "auto",   # 自動根據座標選擇時區
-            },
-            timeout=10,
-        ).json()["current"]
+            return jsonify({
+                "type":          "weather",
+                "date_label":    f"明天（{forecast_date}）",
+                "city":          name,
+                "country":       country,
+                "temperature":   temp_max,
+                "temp_min":      temp_min,
+                "feels_like":    feels_max,
+                "humidity":      None,           # daily API 沒有濕度
+                "wind_speed":    wind,
+                "precipitation": precip,
+                "condition":     condition,
+                "emoji":         emoji,
+            })
 
-        code               = w.get("weather_code", 0)
-        condition, emoji   = WMO_CODE.get(code, ("未知", "🌡️"))
+        else:
+            # ── 今天即時天氣 ──────────────────────────────────────────
+            meteo_resp = requests.get(
+                "https://api.open-meteo.com/v1/forecast",
+                params={
+                    "latitude":  lat, "longitude": lon,
+                    "current":   ("temperature_2m,apparent_temperature,"
+                                  "relative_humidity_2m,wind_speed_10m,"
+                                  "weather_code,precipitation"),
+                    "timezone": "auto",
+                },
+                timeout=10,
+            )
+            if not meteo_resp.ok:
+                return jsonify({"error": f"Open-Meteo 錯誤（HTTP {meteo_resp.status_code}）"}), 502
+            raw = meteo_resp.text.strip()
+            if not raw:
+                return jsonify({"error": "Open-Meteo 回傳空內容"}), 502
+            meteo_data = meteo_resp.json()
+            if "current" not in meteo_data:
+                return jsonify({"error": f"Open-Meteo 格式異常：{raw[:120]}"}), 502
+            w                = meteo_data["current"]
+            code             = w.get("weather_code", 0)
+            condition, emoji = WMO_CODE.get(code, ("未知", "🌡️"))
+            query_time       = w.get("time", "")[:16]   # "2026-05-22T14:03"
 
-        return jsonify({
-            "type":          "weather",
-            "city":          name,
-            "country":       country,
-            "temperature":   w["temperature_2m"],
-            "feels_like":    w["apparent_temperature"],
-            "humidity":      w["relative_humidity_2m"],
-            "wind_speed":    w["wind_speed_10m"],
-            "precipitation": w["precipitation"],
-            "condition":     condition,
-            "emoji":         emoji,
-        })
+            return jsonify({
+                "type":          "weather",
+                "date_label":    f"今天（{query_time}）",
+                "city":          name,
+                "country":       country,
+                "temperature":   w["temperature_2m"],
+                "temp_min":      None,
+                "feels_like":    w["apparent_temperature"],
+                "humidity":      w["relative_humidity_2m"],
+                "wind_speed":    w["wind_speed_10m"],
+                "precipitation": w["precipitation"],
+                "condition":     condition,
+                "emoji":         emoji,
+            })
+
+    except requests.exceptions.Timeout:
+        return jsonify({"error": "⏱️ 天氣 API 請求逾時，請稍後再試"}), 504
+    except requests.exceptions.ConnectionError:
+        return jsonify({"error": "🌐 無法連線天氣 API，請確認網路連線"}), 503
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        return jsonify({"error": f"天氣查詢失敗：{e}"}), 500
 
 
 def _is_ratelimit(err: Exception) -> bool:
@@ -441,6 +937,7 @@ def _ddgs_call(fn, max_retries: int = 3):
 
 def _news(query: str, lang: str = "zh"):
     """新聞搜尋：DuckDuckGo News（含 rate limit 自動重試）"""
+    logger.info(f"🔎 新聞搜尋 | query='{query}' | lang={lang}")
     region_map = {"zh": "tw-tzh", "en": "us-en", "ja": "jp-jpn"}
     region = region_map.get(lang, "tw-tzh")
 
@@ -460,16 +957,23 @@ def _news(query: str, lang: str = "zh"):
 
     try:
         items = _ddgs_call(fetch)
+        logger.info(f"✅ 新聞搜尋完成 | 找到 {len(items)} 筆結果")
+        if items:
+            logger.debug(f"   標題: {items[0].get('title', 'N/A')[:60]}...")
         return jsonify({"type": "news", "results": items, "query": query})
     except Exception as e:
         if _is_ratelimit(e):
+            logger.warning(f"⚠️ DuckDuckGo 速率限制: {str(e)}")
             return jsonify({"error": "DuckDuckGo 請求過於頻繁，請稍等幾秒再試 🙏"}), 429
+        logger.error(f"❌ 新聞搜尋失敗: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 
 def _web(query: str):
     """網路搜尋：DuckDuckGo Text（含 rate limit 自動重試）"""
+    logger.info(f"🔎 網路搜尋 | query='{query}'")
     if not query:
+        logger.warning("⚠️ 網路搜尋：查詢詞為空")
         return jsonify({"error": "請輸入搜尋關鍵字"}), 400
 
     def fetch():
@@ -487,10 +991,15 @@ def _web(query: str):
 
     try:
         items = _ddgs_call(fetch)
+        logger.info(f"✅ 網路搜尋完成 | 找到 {len(items)} 筆結果")
+        if items:
+            logger.debug(f"   標題: {items[0].get('title', 'N/A')[:60]}...")
         return jsonify({"type": "web", "results": items, "query": query})
     except Exception as e:
         if _is_ratelimit(e):
+            logger.warning(f"⚠️ DuckDuckGo 速率限制: {str(e)}")
             return jsonify({"error": "DuckDuckGo 請求過於頻繁，請稍等幾秒再試 🙏"}), 429
+        logger.error(f"❌ 網路搜尋失敗: {str(e)}")
         return jsonify({"error": str(e)}), 500
 
 

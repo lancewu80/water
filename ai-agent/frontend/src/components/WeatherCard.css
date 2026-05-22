@@ -7,6 +7,41 @@
   animation: fadeIn .3s ease;
 }
 
+/* 明天預報：換橙色系 */
+.weather-card.weather-forecast {
+  background: linear-gradient(135deg, #fff7ed 0%, #fef9c3 100%);
+  border-color: #fed7aa;
+  box-shadow: 0 4px 24px rgba(251,146,60,.12);
+}
+
+/* 日期標籤 */
+.weather-date-label {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  font-size: .8rem;
+  font-weight: 600;
+  padding: .3rem .75rem;
+  border-radius: 999px;
+  margin-bottom: 1rem;
+  width: fit-content;
+}
+.label-today    { background: #dbeafe; color: #1d4ed8; }
+.label-tomorrow { background: #fed7aa; color: #c2410c; }
+.weather-date-time {
+  font-weight: 400;
+  opacity: .8;
+}
+
+/* 溫度群組（最高 + 最低）*/
+.weather-temp-group { text-align: right; }
+.weather-temp-min {
+  font-size: .85rem;
+  color: #64748b;
+  text-align: right;
+  margin-top: .2rem;
+}
+
 .weather-top {
   display: flex;
   justify-content: space-between;
@@ -83,7 +118,91 @@
   text-align: right;
 }
 
+/* ── 多天預報 ─────────────────────────────────────────────── */
+.weather-forecast-multi {
+  background: linear-gradient(135deg, #f8fafc 0%, #f1f5f9 100%);
+  border-color: #e2e8f0;
+  padding: 1.5rem;
+}
+
+.forecast-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  margin-bottom: 1.2rem;
+}
+
+.label-week {
+  font-size: .8rem;
+  font-weight: 600;
+  color: #7c3aed;
+  background: #ede9fe;
+  padding: .3rem .75rem;
+  border-radius: 999px;
+}
+
+.forecast-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+}
+
+.forecast-row {
+  display: grid;
+  grid-template-columns: 52px 1fr 56px 1fr;
+  align-items: center;
+  gap: .75rem;
+  padding: .55rem .25rem;
+  border-bottom: 1px solid #f1f5f9;
+  transition: background .12s;
+}
+.forecast-row:last-child { border-bottom: none; }
+.forecast-row:hover      { background: rgba(255,255,255,.7); border-radius: 8px; }
+.forecast-today          { font-weight: 600; }
+
+/* 日期欄 */
+.fc-day { display: flex; flex-direction: column; line-height: 1.3; }
+.fc-wday { font-size: .82rem; font-weight: 600; color: #334155; }
+.fc-date { font-size: .72rem; color: #94a3b8; }
+
+/* 天氣狀況 */
+.fc-cond { display: flex; align-items: center; gap: .4rem; }
+.fc-emoji { font-size: 1.3rem; }
+.fc-label { font-size: .78rem; color: #475569; white-space: nowrap; }
+
+/* 降雨機率 */
+.fc-rain { font-size: .78rem; text-align: center; white-space: nowrap; }
+
+/* 溫度色條 */
+.fc-temp-bar-wrap {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+}
+.fc-temp-min, .fc-temp-max {
+  font-size: .8rem;
+  font-weight: 600;
+  min-width: 28px;
+}
+.fc-temp-min { text-align: right; }
+.fc-temp-max { text-align: left; }
+.fc-temp-bar-track {
+  position: relative;
+  flex: 1;
+  height: 6px;
+  background: #e2e8f0;
+  border-radius: 3px;
+  overflow: hidden;
+}
+.fc-temp-bar-fill {
+  position: absolute;
+  top: 0;
+  height: 100%;
+  border-radius: 3px;
+}
+
 @media (max-width: 480px) {
   .weather-stats { grid-template-columns: 1fr; }
   .weather-temp  { font-size: 3rem; }
+  .forecast-row  { grid-template-columns: 44px 1fr 44px 1fr; gap: .4rem; }
 }
