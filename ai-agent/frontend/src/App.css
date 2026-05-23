@@ -41,72 +41,73 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   padding: 0 1rem;
 }
 
-/* ── Mode Toggle Row ───────────────────────────────────── */
+/* ── 4-Mode Selector Row ───────────────────────────────── */
+.mode-selector-row {
+  display: flex;
+  align-items: stretch;
+  gap: .5rem;
+  margin-bottom: 1rem;
+  flex-wrap: wrap;
+}
+
+/* ── Individual Mode Button ────────────────────────────── */
+.mode-btn {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: .15rem;
+  padding: .6rem 1rem;
+  border-radius: 10px;
+  border: 2px solid var(--border);
+  background: var(--card);
+  color: var(--text);
+  font-size: .88rem;
+  cursor: pointer;
+  transition: all .2s ease;
+  flex: 1;
+  min-width: 72px;
+  box-shadow: 0 1px 4px rgba(0,0,0,.05);
+}
+
+.mode-btn:hover {
+  border-color: var(--mode-color, var(--primary));
+  background: color-mix(in srgb, var(--mode-color, var(--primary)) 6%, transparent);
+  transform: translateY(-1px);
+  box-shadow: 0 4px 10px color-mix(in srgb, var(--mode-color, var(--primary)) 20%, transparent);
+}
+
+.mode-btn-active {
+  border-color: var(--mode-color, var(--primary)) !important;
+  background: color-mix(in srgb, var(--mode-color, var(--primary)) 10%, transparent) !important;
+  color: var(--mode-color, var(--primary));
+  box-shadow: 0 4px 12px color-mix(in srgb, var(--mode-color, var(--primary)) 25%, transparent) !important;
+}
+
+.mode-btn-icon {
+  font-size: 1.4rem;
+  line-height: 1;
+}
+
+.mode-btn-label {
+  font-weight: 700;
+  font-size: .85rem;
+  letter-spacing: -.3px;
+}
+
+.mode-btn-sub {
+  font-size: .7rem;
+  font-weight: 400;
+  opacity: .6;
+  white-space: nowrap;
+}
+
+/* ── Legacy mode-toggle kept for fallback ──────────────── */
 .mode-toggle-row {
   display: flex;
   align-items: center;
   gap: 1rem;
   margin-bottom: 1rem;
-}
-
-/* ── Mode Toggle Button ────────────────────────────────── */
-.mode-toggle {
-  display: flex;
-  align-items: center;
-  gap: .5rem;
-  padding: .6rem 1rem;
-  border-radius: 999px;
-  border: 2px solid var(--border);
-  background: var(--card);
-  color: var(--text);
-  font-size: .9rem;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all .25s ease;
-  box-shadow: 0 2px 8px rgba(0,0,0,.06);
-}
-
-.mode-toggle:hover {
-  border-color: var(--primary);
-  box-shadow: 0 4px 12px rgba(59,130,246,.15);
-}
-
-.mode-toggle.mode-fast {
-  border-color: #10b981;
-  background: color-mix(in srgb, #10b981 6%, transparent);
-}
-
-.mode-toggle.mode-fast:hover {
-  border-color: #059669;
-  background: color-mix(in srgb, #10b981 12%, transparent);
-}
-
-.mode-toggle.mode-ai {
-  border-color: #a855f7;
-  background: color-mix(in srgb, #a855f7 6%, transparent);
-}
-
-.mode-toggle.mode-ai:hover {
-  border-color: #9333ea;
-  background: color-mix(in srgb, #a855f7 12%, transparent);
-}
-
-.mode-icon {
-  font-size: 1.2rem;
-  display: inline-block;
-}
-
-.mode-label {
-  font-weight: 700;
-  letter-spacing: -.3px;
-}
-
-.mode-sub {
-  font-size: .75rem;
-  font-weight: 500;
-  opacity: .65;
-  display: block;
-  margin-top: -.15rem;
 }
 
 .mode-hint {
@@ -116,6 +117,426 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   background: color-mix(in srgb, var(--primary) 8%, transparent);
   border-radius: 999px;
   border: 1px solid color-mix(in srgb, var(--primary) 20%, transparent);
+}
+
+/* ── AI Mode Color Overrides ───────────────────────────── */
+.app.mode-gemini { --primary: #3b82f6; --primary-dark: #2563eb; }
+.app.mode-multi  { --primary: #f59e0b; --primary-dark: #d97706; }
+.app.mode-ollama { --primary: #a855f7; --primary-dark: #9333ea; }
+
+/* ── agent_used Badge ──────────────────────────────────── */
+.agent-used-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: .3rem;
+  padding: .25rem .65rem;
+  border-radius: 999px;
+  background: color-mix(in srgb, var(--agent-color, #6b7280) 12%, transparent);
+  color: var(--agent-color, #6b7280);
+  border: 1px solid color-mix(in srgb, var(--agent-color, #6b7280) 30%, transparent);
+  font-size: .78rem;
+  font-weight: 700;
+  letter-spacing: .3px;
+  text-transform: uppercase;
+}
+
+/* ── Source Toggle（搜尋 / 直接回答）────────────────────── */
+.source-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  flex-wrap: wrap;
+  margin-bottom: .75rem;
+  padding: .5rem .75rem;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.source-toggle-label {
+  font-size: .78rem;
+  font-weight: 600;
+  color: var(--text-muted);
+  white-space: nowrap;
+}
+
+.source-toggle-group {
+  display: flex;
+  gap: 0;
+  border: 1.5px solid var(--border);
+  border-radius: 8px;
+  overflow: hidden;
+}
+
+.source-btn {
+  padding: .35rem .85rem;
+  border: none;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: .82rem;
+  font-weight: 500;
+  cursor: pointer;
+  transition: all .15s;
+  white-space: nowrap;
+}
+
+.source-btn:hover { background: color-mix(in srgb, var(--primary) 8%, transparent); color: var(--primary); }
+
+.source-btn-active {
+  background: var(--primary) !important;
+  color: #fff !important;
+  font-weight: 700;
+}
+
+.source-hint {
+  font-size: .75rem;
+  color: var(--text-muted);
+  font-style: italic;
+  flex: 1;
+}
+
+/* ── Direct Answer Card ────────────────────────────────── */
+.direct-answer-card {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, #10b981 5%, white),
+    color-mix(in srgb, #0891b2 5%, white));
+  border: 1.5px solid color-mix(in srgb, #10b981 30%, transparent);
+  border-radius: var(--radius);
+  margin-bottom: 1.25rem;
+  /* overflow: clip 保留圓角視覺裁切，同時不抑制子元素的 scroll 行為 */
+  overflow: clip;
+  box-shadow: 0 4px 16px rgba(16,185,129,.08);
+  animation: fadeIn .3s ease;
+}
+
+.direct-answer-header {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .85rem 1.25rem .7rem;
+  background: linear-gradient(90deg, #065f46 0%, #0f766e 100%);
+  color: #fff;
+  /* 固定於卡片頂部，不隨 body 捲動 */
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.direct-answer-icon { font-size: 1.2rem; }
+
+.direct-answer-title {
+  font-weight: 700;
+  font-size: .92rem;
+  letter-spacing: .3px;
+  flex: 1;
+}
+
+.direct-answer-badge {
+  font-size: .75rem;
+  font-weight: 700;
+  background: rgba(255,255,255,.15);
+  padding: .2rem .55rem;
+  border-radius: 999px;
+  letter-spacing: .3px;
+  color: #fff !important;
+}
+
+.direct-answer-body {
+  padding: 1rem 1.25rem 1.25rem;
+  /* 不用 flex，避免 flex 父層在某些瀏覽器干擾 overflow-y */
+  max-height: 65vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  /* 順滑捲動（iOS / macOS Trackpad）*/
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* 子元素間距（原 flex gap 改為 margin）*/
+.direct-answer-body > * { margin-bottom: .4rem; }
+.direct-answer-body > *:last-child { margin-bottom: 0; }
+
+/* 自訂捲軸外觀（Chromium / Safari）*/
+.direct-answer-body::-webkit-scrollbar {
+  width: 6px;
+}
+.direct-answer-body::-webkit-scrollbar-track {
+  background: transparent;
+}
+.direct-answer-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, #10b981 35%, transparent);
+  border-radius: 999px;
+}
+.direct-answer-body::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, #10b981 60%, transparent);
+}
+
+/* Firefox 捲軸 */
+.direct-answer-body {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, #10b981 35%, transparent) transparent;
+}
+
+.direct-spacer { height: .4rem; }
+
+.direct-h3 {
+  font-size: .9rem;
+  font-weight: 700;
+  color: #065f46;
+  margin-top: .5rem;
+}
+
+/* ── Markdown 共用樣式（direct-answer-body / analysis-card-body 內）*/
+.md-list {
+  display: flex;
+  flex-direction: column;
+  gap: .3rem;
+  padding-left: .25rem;
+  margin: .2rem 0;
+}
+
+/* 有序列表子項顯示數字 */
+.md-list-ol { counter-reset: md-ol; }
+.md-list-ol > .analysis-bullet::before {
+  content: counter(md-ol) ".";
+  counter-increment: md-ol;
+  color: var(--primary, #3b82f6);
+  font-weight: 700;
+  min-width: 1.4rem;
+  flex-shrink: 0;
+}
+/* 有序列表隱藏原本的 • */
+.md-list-ol > .analysis-bullet > .analysis-bullet-dot { display: none; }
+
+.md-hr {
+  border: none;
+  border-top: 1.5px solid color-mix(in srgb, currentColor 20%, transparent);
+  margin: .75rem 0;
+}
+
+.md-inline-code {
+  font-family: "Courier New", Consolas, monospace;
+  font-size: .82rem;
+  background: rgba(0,0,0,.06);
+  padding: .1rem .35rem;
+  border-radius: 4px;
+  color: #0f766e;
+}
+
+.md-pre {
+  background: #1e293b;
+  color: #e2e8f0;
+  padding: .85rem 1rem;
+  border-radius: 8px;
+  font-size: .82rem;
+  overflow-x: auto;
+  margin: .4rem 0;
+  font-family: "Courier New", Consolas, monospace;
+  line-height: 1.55;
+}
+
+.md-blockquote {
+  border-left: 3px solid color-mix(in srgb, currentColor 30%, transparent);
+  padding-left: .85rem;
+  margin: .4rem 0;
+  color: var(--text-muted);
+  font-style: italic;
+  font-size: .88rem;
+}
+
+/* ── Markdown 表格 ────────────────────────────────────────── */
+.md-table-wrapper {
+  overflow-x: auto;           /* 欄位太多時橫向捲動 */
+  margin: .6rem 0 .8rem;
+  border-radius: 8px;
+  border: 1px solid var(--border);
+  -webkit-overflow-scrolling: touch;
+}
+
+.md-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: .83rem;
+  line-height: 1.5;
+  white-space: nowrap;        /* 防止儲存格內文字換行（欄位緊湊）*/
+}
+
+/* 允許說明性文字欄自動換行 */
+.md-table td { white-space: normal; }
+
+.md-thead {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, var(--primary, #3b82f6) 15%, white),
+    color-mix(in srgb, var(--primary, #3b82f6) 8%, white));
+}
+
+.md-th {
+  padding: .55rem .85rem;
+  font-weight: 700;
+  color: var(--text);
+  text-align: left;
+  border-bottom: 2px solid color-mix(in srgb, var(--primary, #3b82f6) 30%, transparent);
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+}
+.md-th:last-child { border-right: none; }
+
+.md-tr:nth-child(even) {
+  background: color-mix(in srgb, var(--primary, #3b82f6) 4%, transparent);
+}
+.md-tr:hover {
+  background: color-mix(in srgb, var(--primary, #3b82f6) 8%, transparent);
+}
+
+.md-td {
+  padding: .5rem .85rem;
+  border-bottom: 1px solid var(--border);
+  border-right: 1px solid var(--border);
+  color: var(--text);
+  vertical-align: top;
+  min-width: 80px;
+}
+.md-td:last-child { border-right: none; }
+.md-tr:last-child .md-td { border-bottom: none; }
+
+/* direct-answer-card 內的表格用綠色系 header */
+.direct-answer-card .md-thead {
+  background: linear-gradient(90deg,
+    color-mix(in srgb, #10b981 15%, white),
+    color-mix(in srgb, #10b981 7%, white));
+}
+.direct-answer-card .md-th {
+  border-bottom-color: color-mix(in srgb, #10b981 40%, transparent);
+}
+.direct-answer-card .md-tr:nth-child(even) {
+  background: color-mix(in srgb, #10b981 5%, transparent);
+}
+.direct-answer-card .md-tr:hover {
+  background: color-mix(in srgb, #10b981 10%, transparent);
+}
+
+/* ── Analysis Card ─────────────────────────────────────── */
+.analysis-card {
+  background: linear-gradient(135deg,
+    color-mix(in srgb, #3b82f6 5%, white),
+    color-mix(in srgb, #06b6d4 5%, white));
+  border: 1.5px solid color-mix(in srgb, #3b82f6 25%, transparent);
+  border-radius: var(--radius);
+  margin-bottom: 1.25rem;
+  overflow: clip;
+  box-shadow: 0 4px 16px rgba(59,130,246,.1);
+  animation: fadeIn .3s ease;
+}
+
+.analysis-card-header {
+  display: flex;
+  align-items: center;
+  gap: .6rem;
+  padding: .9rem 1.25rem .75rem;
+  background: linear-gradient(90deg, #1e40af 0%, #3b82f6 100%);
+  color: #fff;
+  position: sticky;
+  top: 0;
+  z-index: 1;
+}
+
+.analysis-card-icon { font-size: 1.3rem; }
+
+.analysis-card-title {
+  font-weight: 700;
+  font-size: .95rem;
+  letter-spacing: .3px;
+}
+
+.analysis-card-body {
+  padding: 1rem 1.25rem 1.25rem;
+  max-height: 65vh;
+  overflow-y: auto;
+  overflow-x: hidden;
+  -webkit-overflow-scrolling: touch;
+  scroll-behavior: smooth;
+}
+
+/* 子元素間距 */
+.analysis-card-body > * { margin-bottom: .45rem; }
+.analysis-card-body > *:last-child { margin-bottom: 0; }
+
+/* 自訂捲軸（Chromium / Safari）*/
+.analysis-card-body::-webkit-scrollbar { width: 6px; }
+.analysis-card-body::-webkit-scrollbar-track { background: transparent; }
+.analysis-card-body::-webkit-scrollbar-thumb {
+  background: color-mix(in srgb, #3b82f6 35%, transparent);
+  border-radius: 999px;
+}
+.analysis-card-body::-webkit-scrollbar-thumb:hover {
+  background: color-mix(in srgb, #3b82f6 60%, transparent);
+}
+/* Firefox */
+.analysis-card-body {
+  scrollbar-width: thin;
+  scrollbar-color: color-mix(in srgb, #3b82f6 35%, transparent) transparent;
+}
+
+.analysis-main-title {
+  font-size: 1.05rem;
+  font-weight: 700;
+  color: var(--text);
+  margin-bottom: .2rem;
+}
+
+.analysis-section-title {
+  font-size: .95rem;
+  font-weight: 700;
+  color: #1e40af;
+  margin-top: .6rem;
+  padding-bottom: .3rem;
+  border-bottom: 1px solid color-mix(in srgb, #3b82f6 20%, transparent);
+}
+
+.analysis-bullet {
+  display: flex;
+  align-items: flex-start;
+  gap: .5rem;
+  font-size: .88rem;
+  color: var(--text);
+  padding-left: .25rem;
+  line-height: 1.55;
+}
+
+.analysis-bullet-dot {
+  color: #3b82f6;
+  font-weight: 700;
+  margin-top: .05rem;
+  flex-shrink: 0;
+}
+
+.analysis-para {
+  font-size: .88rem;
+  color: var(--text);
+  line-height: 1.6;
+}
+
+.analysis-bold {
+  font-size: .9rem;
+  font-weight: 700;
+  color: var(--text);
+  line-height: 1.5;
+}
+
+/* History synthesis wrapper */
+.history-synthesis {
+  margin-top: .4rem;
+  margin-bottom: .2rem;
+}
+
+.history-synthesis .analysis-card {
+  margin-bottom: 0;
+}
+
+.history-synthesis .analysis-card-body,
+.history-synthesis .direct-answer-body {
+  max-height: 200px;
+  overflow-y: auto;
 }
 
 /* ── Search Section ────────────────────────────────────── */
@@ -278,6 +699,7 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   display: flex;
   align-items: center;
   gap: .6rem;
+  margin-bottom: .75rem;
 }
 
 .session-count {

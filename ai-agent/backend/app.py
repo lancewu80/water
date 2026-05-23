@@ -22,6 +22,24 @@ from flask import Flask, jsonify, request
 from flask_cors import CORS
 from ddgs import DDGS
 
+# ── 載入 .env（GEMINI_API_KEY 等） ────────────────────────────
+try:
+    from dotenv import load_dotenv
+    load_dotenv(os.path.join(os.path.dirname(__file__), ".env"))
+except ImportError:
+    pass  # python-dotenv 未安裝時跳過，直接用系統環境變數
+
+# ── Gemini SDK（可選，未安裝時 Gemini 功能自動停用） ──────────
+# 使用新版 google-genai SDK（舊版 google.generativeai 已棄用）
+try:
+    from google import genai as _genai_module
+    from google.genai import types as genai_types
+    _GENAI_AVAILABLE = True
+except ImportError:
+    _genai_module = None
+    genai_types    = None
+    _GENAI_AVAILABLE = False
+
 # ── 日誌設定 ───────────────────────────────────────────────────────
 LOG_DIR = os.path.join(os.path.dirname(__file__), "logs")
 os.makedirs(LOG_DIR, exist_ok=True)
@@ -49,6 +67,78 @@ MAX_HISTORY_MSGS = 20   # 最多保留 20 條（約 6-7 輪對話）
 # ── Ollama 設定 ────────────────────────────────────────────────
 OLLAMA_URL   = "http://localhost:11434/api/chat"
 OLLAMA_MODEL = "gemma4:e4b"
+
+# ── Gemini 設定（使用新版 google-genai SDK）─────────────────────
+GEMINI_API_KEY = os.environ.get("GEMINI_API_KEY", "")
+GEMINI_MODEL   = "gemini-2.5-flash"   # 免費層可用模型
+
+GEMINI_SYSTEM_PROMPT = (
+    "你是一個智慧搜尋助手，具備 Chain-of-Thought 多步驟推理能力。\n"
+    "根據問題與歷史對話選擇工具：\n"
+    "  - 天氣預報 → get_weather\n"
+    "  - 明確要求新聞頭條 → search_news\n"
+    "  - 其他查詢（含分析、比較、解釋）→ search_web\n\n"
+    "【代名詞解析】從歷史找出代名詞對應的具體實體名稱，組成完整查詢詞。\n"
+    "【複雜查詢】先思考需要哪些資訊再選工具；query 參數用精準關鍵詞，不加語氣詞。"
+)
+
+# Gemini 工具定義（新版 SDK 用 types.FunctionDeclaration）
+_gemini_client = None
+_gemini_tool   = None
+
+if _GENAI_AVAILABLE and GEMINI_API_KEY:
+    try:
+        _gemini_client = _genai_module.Client(api_key=GEMINI_API_KEY)
+
+        _gemini_tool = genai_types.Tool(function_declarations=[
+            genai_types.FunctionDeclaration(
+                name="get_weather",
+                description="查詢指定城市天氣，支援今天/明天/7天/10天預報",
+                parameters=genai_types.Schema(
+                    type=genai_types.Type.OBJECT,
+                    properties={
+                        "city": genai_types.Schema(
+                            type=genai_types.Type.STRING,
+                            description="城市名稱，支援中/英/日文"),
+                        "date": genai_types.Schema(
+                            type=genai_types.Type.STRING,
+                            description="today（今天）/ tomorrow（明天）/ week（7天）/ 10days（10天）"),
+                    },
+                    required=["city"],
+                ),
+            ),
+            genai_types.FunctionDeclaration(
+                name="search_news",
+                description="搜尋最新新聞、頭條報導",
+                parameters=genai_types.Schema(
+                    type=genai_types.Type.OBJECT,
+                    properties={
+                        "query": genai_types.Schema(type=genai_types.Type.STRING, description="新聞搜尋關鍵字"),
+                        "lang":  genai_types.Schema(type=genai_types.Type.STRING, description="zh/en/ja"),
+                    },
+                    required=["query"],
+                ),
+            ),
+            genai_types.FunctionDeclaration(
+                name="search_web",
+                description="搜尋網路任意主題，適合分析、比較、解釋等複雜查詢",
+                parameters=genai_types.Schema(
+                    type=genai_types.Type.OBJECT,
+                    properties={
+                        "query": genai_types.Schema(type=genai_types.Type.STRING, description="搜尋關鍵字"),
+                    },
+                    required=["query"],
+                ),
+            ),
+        ])
+
+        # 驗證連線（列出模型不耗費 quota）
+        logger.info(f"✅ Gemini 初始化成功 | model={GEMINI_MODEL}")
+    except Exception as _ge:
+        _gemini_client = None
+        logger.warning(f"⚠️ Gemini 初始化失敗: {_ge}")
+elif not GEMINI_API_KEY:
+    logger.warning("⚠️ GEMINI_API_KEY 未設定，Gemini 功能停用（請確認 backend/.env 檔案）")
 
 # 工具定義（Ollama tool format）
 AGENT_TOOLS = [
@@ -261,14 +351,33 @@ def agent_search():
     data       = request.get_json(force=True)
     query      = data.get("query", "").strip()
     session_id = data.get("session_id", "") or str(uuid.uuid4())
+    direct     = data.get("direct", False)   # True = 直接回答，不呼叫工具
     logger.info(f"\n{'='*80}")
-    logger.info(f"🧠 AI 模式搜尋 | session_id={session_id[:8]}... | query='{query}'")
+    logger.info(f"🧠 AI 模式搜尋 | session_id={session_id[:8]}... | query='{query}' | direct={direct}")
 
     if not query:
         return jsonify({"error": "請輸入搜尋內容"}), 400
 
     # ── 取出該 session 的對話歷史 ────────────────────────────────
     history = sessions.get(session_id, [])
+
+    # ── 直接回答模式（跳過工具，直接問 Ollama）────────────────────
+    if direct:
+        text = _run_ollama_direct(query, history)
+        if not text:
+            return jsonify({"error": "⚠️ Ollama 無回應，請確認 ollama serve 已啟動"}), 503
+        new_hist = history + [
+            {"role": "user",      "content": query},
+            {"role": "assistant", "content": text},
+        ]
+        sessions[session_id] = new_hist[-MAX_HISTORY_MSGS:]
+        return jsonify({
+            "type":          "direct_answer",
+            "answer":        text,
+            "agent_used":    "ollama",
+            "session_id":    session_id,
+            "history_count": len(new_hist) // 2,
+        })
 
     # ── 規則式追問解析（在 LLM 之前攔截，小模型保底）────────────
     logger.info(f"📋 執行規則解析器...")
@@ -365,7 +474,8 @@ def agent_search():
         resp = requests.post(
             OLLAMA_URL,
             json={"model": OLLAMA_MODEL, "messages": messages,
-                  "tools": AGENT_TOOLS, "stream": False},
+                  "tools": AGENT_TOOLS, "stream": False,
+                  "options": {"num_predict": 8192}},
             timeout=180,   # 3 分鐘（大型 prompt / 慢速機器需要較長推理時間）
         )
         resp.raise_for_status()
@@ -1001,6 +1111,668 @@ def _web(query: str):
             return jsonify({"error": "DuckDuckGo 請求過於頻繁，請稍等幾秒再試 🙏"}), 429
         logger.error(f"❌ 網路搜尋失敗: {str(e)}")
         return jsonify({"error": str(e)}), 500
+
+
+# ══════════════════════════════════════════════════════════════
+#  Gemini 多 Agent 協作
+#  架構：
+#    /api/agent/gemini → Gemini 專屬（複雜推理 + 工具）
+#    /api/agent/multi  → Orchestrator 自動路由（複雜→Gemini / 簡單→Ollama）
+# ══════════════════════════════════════════════════════════════
+
+# ── 共用輔助函數 ──────────────────────────────────────────────
+
+def _to_gemini_history(history: list) -> list:
+    """
+    Ollama 格式歷史 → Gemini Content 物件列表（新版 SDK）
+    Ollama: {role: user|assistant, content: "..."}
+    Gemini: Content(role=user|model, parts=[Part(text="...")])
+    同時清理 assistant 訊息中的 [工具=X 參數=Y] 結構標記
+    """
+    result = []
+    for msg in history:
+        role = "model" if msg["role"] == "assistant" else "user"
+        content = msg["content"]
+        if msg["role"] == "assistant":
+            content = re.sub(r"^\[工具=\w+\s+參數=\{.*?\}\]\s*", "", content).strip()
+            if not content:
+                continue
+        result.append(
+            genai_types.Content(role=role, parts=[genai_types.Part(text=content)])
+        )
+    return result
+
+
+def _assess_complexity(query: str) -> str:
+    """
+    Orchestrator：評估查詢複雜度，決定路由
+    Returns: "gemini"（複雜推理）| "ollama"（標準工具查詢）
+    """
+    COMPLEX_KW = [
+        # 中文
+        "分析", "比較", "為什麼", "為何", "原因", "影響", "趨勢", "預測",
+        "建議", "優缺點", "差異", "解釋", "評估", "洞察", "深入", "綜合",
+        "背後", "機制", "策略", "評比", "如何才能", "有什麼關係",
+        # 英文
+        "analyze", "compare", "why", "reason", "impact", "trend",
+        "predict", "recommend", "pros and cons", "difference", "explain",
+    ]
+    matched = [kw for kw in COMPLEX_KW if kw in query.lower()]
+    if matched:
+        logger.debug(f"   🧭 複雜度評估：匹配={matched} → gemini")
+        return "gemini"
+    logger.debug(f"   🧭 複雜度評估：無複雜關鍵字 → ollama")
+    return "ollama"
+
+
+def _execute_tool(name: str, args: dict, query: str):
+    """共用工具執行器，避免各 endpoint 重複相同程式碼"""
+    if name == "get_weather":
+        return _weather(args.get("city", query), args.get("date", "today"))
+    elif name == "search_news":
+        return _news(args.get("query", query), args.get("lang", "zh"))
+    elif name == "search_web":
+        return _web(args.get("query", query))
+    return None
+
+
+def _safe_extract(raw) -> tuple:
+    """
+    安全地從工具回傳值提取 (result_data, status_code)
+    處理 Flask Response 物件 / tuple / dict 三種情況
+    """
+    response_obj = raw[0] if isinstance(raw, tuple) else raw
+    status_code  = raw[1] if isinstance(raw, tuple) else 200
+    if isinstance(response_obj, dict):
+        return response_obj, status_code
+    elif hasattr(response_obj, "get_json"):
+        return response_obj.get_json(), status_code
+    return None, 500
+
+
+def _update_session(session_id: str, history: list, query: str,
+                    tool_name: str, tool_args: dict, result_data: dict):
+    """統一更新 session 歷史，避免各 endpoint 重複邏輯"""
+    summary   = _summarize_result(result_data)
+    args_hint = json.dumps(tool_args, ensure_ascii=False)
+    new_hist  = history + [
+        {"role": "user",      "content": query},
+        {"role": "assistant", "content": f"[工具={tool_name} 參數={args_hint}] {summary}"},
+    ]
+    sessions[session_id] = new_hist[-MAX_HISTORY_MSGS:]
+
+
+def _run_gemini_decision(query: str, history: list) -> tuple | None:
+    """
+    使用 Gemini 進行工具決策（新版 google-genai SDK）
+    Returns:
+      (tool_name, args_dict)           → 需要呼叫工具
+      ("direct_answer", {"text": ...}) → Gemini 直接回答
+      None                             → 呼叫失敗
+    """
+    if _gemini_client is None:
+        logger.warning("⚠️ Gemini Client 未初始化")
+        return None
+    try:
+        gemini_hist = _to_gemini_history(history)
+        chat = _gemini_client.chats.create(
+            model=GEMINI_MODEL,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=GEMINI_SYSTEM_PROMPT,
+                tools=[_gemini_tool],
+                temperature=0.1,
+            ),
+            history=gemini_hist,
+        )
+        resp = chat.send_message(query)
+
+        # 解析 function call（新 SDK 從 candidates[0].content.parts 取）
+        for part in resp.candidates[0].content.parts:
+            if part.function_call and part.function_call.name:
+                fc   = part.function_call
+                args = {k: v for k, v in fc.args.items()}
+                logger.info(f"🤖 Gemini 工具決策 | tool={fc.name} | args={json.dumps(args, ensure_ascii=False)}")
+                return (fc.name, args)
+
+        # 沒有 function call → 純文字回答
+        text = resp.text or ""
+        logger.info(f"💬 Gemini 直接回答 | len={len(text)}")
+        return ("direct_answer", {"text": text})
+
+    except Exception as e:
+        err_str = str(e)
+        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            logger.warning(f"⚠️ Gemini quota 超限，請稍後再試: {err_str[:120]}")
+        else:
+            logger.error(f"❌ Gemini 呼叫失敗: {err_str[:200]}")
+        return None
+
+
+def _run_gemini_synthesis(query: str, tool_result: dict) -> str:
+    """
+    將搜尋結果送回 Gemini 生成分析報告。
+    - 比較/vs 型查詢 → 結構化比較報告（規格 / 效能 / 推薦）
+    - 分析/趨勢型查詢 → 重點摘要 + 洞察
+    Returns: 報告文字（Markdown 格式），或 ""（失敗時）
+    """
+    if _gemini_client is None:
+        return ""
+    try:
+        # 截取搜尋結果摘要（title + summary）避免 token 過長
+        results = tool_result.get("results", [])
+        result_lines = []
+        for r in results[:6]:
+            title   = r.get("title", "")
+            summary = r.get("summary", "")[:200]
+            result_lines.append(f"• {title}\n  {summary}")
+        result_str = "\n".join(result_lines) or json.dumps(tool_result, ensure_ascii=False)[:1500]
+
+        # 偵測查詢類型
+        is_comparison = bool(re.search(
+            r'\bvs\b|versus|比較|差異|哪個好|哪個更|推薦.*哪|選哪|還是.*好', query, re.IGNORECASE
+        ))
+
+        if is_comparison:
+            system_inst = "你是專業產品評測分析師，根據網路資料提供客觀、有根據的比較報告，用繁體中文回答。"
+            prompt = (
+                f"用戶問題：{query}\n\n"
+                f"搜尋到的相關資料：\n{result_str}\n\n"
+                "請根據以上資料，撰寫一份結構化比較報告，格式如下：\n\n"
+                "## 📊 規格比較\n"
+                "（列出兩者關鍵規格差異，有數字更好）\n\n"
+                "## ⚡ 效能分析\n"
+                "（針對用戶問題的效能面向深入比較）\n\n"
+                "## 💰 性價比評估\n"
+                "（價格區間與物超所值程度）\n\n"
+                "## 🎯 推薦結論\n"
+                "（哪種需求適合哪個，給出明確建議）\n\n"
+                "每段 2-3 句，有具體事實或數字支撐，不要模糊。"
+            )
+            max_tokens = 800
+        else:
+            system_inst = "你是專業分析師，根據搜尋結果提供結構化分析，用繁體中文回答，條理清晰。"
+            prompt = (
+                f"用戶問題：{query}\n\n"
+                f"搜尋到的相關資料：\n{result_str}\n\n"
+                "請根據以上資料，用繁體中文提供結構化分析，格式如下：\n\n"
+                "## 🔍 重點摘要\n"
+                "（3-4 個核心重點，每點一句）\n\n"
+                "## 💡 深度洞察\n"
+                "（超越表面資訊的分析與解讀）\n\n"
+                "## 📌 結論\n"
+                "（給用戶的具體建議或結論）\n\n"
+                "有事實依據，不要模糊。"
+            )
+            max_tokens = 600
+
+        resp = _gemini_client.models.generate_content(
+            model=GEMINI_MODEL,
+            contents=prompt,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=system_inst,
+                temperature=0.3,
+                max_output_tokens=max_tokens,
+            ),
+        )
+        return resp.text or ""
+    except Exception as e:
+        logger.error(f"❌ Gemini 合成失敗: {e}")
+        return ""
+
+
+def _run_ollama_direct(query: str, history: list) -> str:
+    """
+    Ollama 直接回答模式（不呼叫任何工具）
+    讓 Ollama 憑自身知識直接回答，適合一般知識、閒聊、程式、翻譯等問題。
+    Returns: 回答文字，失敗時回傳 ""
+    """
+    try:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是一個知識淵博的 AI 助手，請直接回答用戶的問題。\n"
+                    "用繁體中文回答，條理清晰。\n"
+                    "若問題涉及需要即時資料（如今天天氣、最新股價、最新新聞），"
+                    "請誠實告知你的知識有截止日期，建議用戶切換至「搜尋模式」取得最新資訊。\n"
+                    "適當時可使用 Markdown 格式（標題、條列、粗體）提升可讀性。"
+                ),
+            },
+            *history,
+            {"role": "user", "content": query},
+        ]
+        resp = requests.post(
+            OLLAMA_URL,
+            json={"model": OLLAMA_MODEL, "messages": messages, "stream": False,
+                  "options": {"num_predict": 8192}},
+            timeout=180,
+        )
+        resp.raise_for_status()
+        text = resp.json()["message"].get("content", "")
+        logger.info(f"🧠 Ollama 直接回答 | len={len(text)}")
+        return text
+    except requests.exceptions.Timeout:
+        logger.warning("⚠️ Ollama 直接回答逾時")
+        return ""
+    except requests.exceptions.ConnectionError:
+        logger.warning("⚠️ Ollama 連線失敗")
+        return ""
+    except Exception as e:
+        logger.error(f"❌ Ollama 直接回答失敗: {e}")
+        return ""
+
+
+def _run_gemini_direct(query: str, history: list) -> str:
+    """
+    Gemini 直接回答模式（不呼叫任何工具）
+    讓 Gemini 憑自身知識直接回答，適合知識問答、分析推理等問題。
+    Returns: 回答文字，失敗時回傳 ""
+    """
+    if _gemini_client is None:
+        return ""
+    try:
+        gemini_hist = _to_gemini_history(history)
+        chat = _gemini_client.chats.create(
+            model=GEMINI_MODEL,
+            config=genai_types.GenerateContentConfig(
+                system_instruction=(
+                    "你是一個知識淵博的 AI 助手，請直接回答用戶的問題。\n"
+                    "用繁體中文回答，條理清晰，有根據。\n"
+                    "若問題涉及需要即時資料（如今天天氣、最新股價），"
+                    "請誠實告知並建議用戶切換至「搜尋模式」。\n"
+                    "使用 Markdown 格式（## 標題、- 條列、**粗體**）提升可讀性。"
+                ),
+                temperature=0.7,
+                max_output_tokens=8192,   # 提高上限，避免截斷長篇回答
+            ),
+            history=gemini_hist,
+        )
+        resp = chat.send_message(query)
+        text = resp.text or ""
+        logger.info(f"🔷 Gemini 直接回答 | len={len(text)}")
+        return text
+    except Exception as e:
+        err_str = str(e)
+        if "429" in err_str or "RESOURCE_EXHAUSTED" in err_str:
+            logger.warning(f"⚠️ Gemini quota 超限（直接回答）: {err_str[:120]}")
+        else:
+            logger.error(f"❌ Gemini 直接回答失敗: {err_str[:200]}")
+        return ""
+
+
+# ── Gemini Agent 端點 ─────────────────────────────────────────
+
+@app.route("/api/agent/gemini", methods=["POST"])
+def gemini_agent_search():
+    """
+    🔷 Gemini Agent
+    使用 Google Gemini 2.0 Flash 進行推理與工具選擇
+    支援 synthesis=true 啟用深度分析合成
+    """
+    data       = request.get_json(force=True)
+    query      = data.get("query", "").strip()
+    session_id = data.get("session_id", "") or str(uuid.uuid4())
+    synthesis  = data.get("synthesis", False)  # 是否啟用 Gemini 深度合成
+    direct     = data.get("direct", False)     # True = 直接回答，不呼叫工具
+
+    logger.info(f"\n{'='*80}")
+    logger.info(f"🔷 Gemini Agent | session={session_id[:8]} | query='{query}' | synthesis={synthesis} | direct={direct}")
+
+    if not query:
+        return jsonify({"error": "請輸入搜尋內容"}), 400
+    if _gemini_client is None:
+        return jsonify({"error": "⚠️ Gemini 未初始化，請確認 GEMINI_API_KEY 與 pip install google-genai"}), 503
+
+    history = sessions.get(session_id, [])
+
+    # ── 直接回答模式（跳過工具，直接問 Gemini）────────────────────
+    if direct:
+        text = _run_gemini_direct(query, history)
+        if not text:
+            return jsonify({"error": "⚠️ Gemini 無回應，請稍後再試或確認 API Key"}), 503
+        new_hist = history + [
+            {"role": "user",      "content": query},
+            {"role": "assistant", "content": text},
+        ]
+        sessions[session_id] = new_hist[-MAX_HISTORY_MSGS:]
+        return jsonify({
+            "type":          "direct_answer",
+            "answer":        text,
+            "agent_used":    "gemini",
+            "session_id":    session_id,
+            "history_count": len(new_hist) // 2,
+        })
+
+    # ── 規則層（與 Ollama Agent 共用，保持一致） ────────────────
+    rule_result = _try_rule_followup(query, history)
+    if rule_result:
+        name, args = rule_result
+        raw = _execute_tool(name, args, query)
+        if raw is not None:
+            result_data, status_code = _safe_extract(raw)
+            if result_data is None:
+                return jsonify({"error": "規則工具回傳格式異常"}), 500
+            if status_code >= 400:
+                return (raw[0] if isinstance(raw, tuple) else raw), status_code
+            _update_session(session_id, history, query, name, args, result_data)
+            result_data.update({
+                "session_id": session_id, "agent_used": "rule→gemini",
+                "rule_matched": True, "history_count": len(sessions[session_id]) // 2,
+            })
+            return jsonify(result_data)
+
+    # ── Gemini 工具決策 ──────────────────────────────────────────
+    decision = _run_gemini_decision(query, history)
+    if decision is None:
+        return jsonify({"error": "Gemini 決策失敗，請稍後再試或改用 /api/agent（Ollama 模式）"}), 503
+
+    name, args = decision
+
+    # Gemini 直接回答（無需工具）
+    if name == "direct_answer":
+        text = args.get("text", "")
+        new_hist = history + [
+            {"role": "user",      "content": query},
+            {"role": "assistant", "content": text},
+        ]
+        sessions[session_id] = new_hist[-MAX_HISTORY_MSGS:]
+        return jsonify({
+            "type":          "direct_answer",
+            "answer":        text,
+            "agent_used":    "gemini",
+            "session_id":    session_id,
+            "history_count": len(new_hist) // 2,
+        })
+
+    # 執行工具
+    raw = _execute_tool(name, args, query)
+    if raw is None:
+        return jsonify({"error": f"未知工具：{name}"}), 500
+
+    result_data, status_code = _safe_extract(raw)
+    if result_data is None:
+        return jsonify({"error": "工具回傳格式異常"}), 500
+    if status_code >= 400:
+        return (raw[0] if isinstance(raw, tuple) else raw), status_code
+
+    # 選擇性深度合成（synthesis=true 時啟用）
+    if synthesis:
+        synth_text = _run_gemini_synthesis(query, result_data)
+        if synth_text:
+            result_data["synthesis"] = synth_text
+            logger.info(f"✨ Gemini 合成完成 | length={len(synth_text)}")
+
+    _update_session(session_id, history, query, name, args, result_data)
+    result_data.update({
+        "llm_decision":  {"tool": name, "args": args},
+        "session_id":    session_id,
+        "agent_used":    "gemini",
+        "history_count": len(sessions[session_id]) // 2,
+    })
+    return jsonify(result_data)
+
+
+@app.route("/api/agent/multi", methods=["POST"])
+def multi_agent_search():
+    """
+    🔀 多 Agent 協作（Orchestrator）
+    自動根據查詢複雜度路由：
+      規則追問     → Rule Layer（最快，< 50ms）
+      複雜推理分析 → Gemini（Chain-of-Thought + 深度合成）
+      標準工具查詢 → Ollama（本地、隱私安全）
+    回傳額外欄位：agent_used / route / synthesis
+    """
+    data       = request.get_json(force=True)
+    query      = data.get("query", "").strip()
+    session_id = data.get("session_id", "") or str(uuid.uuid4())
+    synthesis  = data.get("synthesis", True)   # 複雜查詢預設啟用
+    direct     = data.get("direct", False)     # True = 直接回答，不呼叫工具
+
+    logger.info(f"\n{'='*80}")
+    logger.info(f"🔀 Multi-Agent | session={session_id[:8]} | query='{query}' | direct={direct}")
+
+    if not query:
+        return jsonify({"error": "請輸入搜尋內容"}), 400
+
+    history = sessions.get(session_id, [])
+
+    # ── 直接回答模式（Orchestrator 評估複雜度選擇最佳 LLM）────────
+    if direct:
+        # 與搜尋模式相同：用 _assess_complexity 決定路由
+        #   複雜（分析/比較/為什麼…）→ Gemini
+        #   簡單（寫程式/翻譯/問答/寫 code）→ Ollama
+        route = _assess_complexity(query)
+        # 若 Gemini 不可用，直接改 ollama
+        if route == "gemini" and _gemini_client is None:
+            route = "ollama"
+        logger.info(f"🧭 Direct 模式路由 | route={route}")
+
+        text       = ""
+        agent_used = ""
+
+        if route == "gemini":
+            text       = _run_gemini_direct(query, history)
+            agent_used = "gemini" if text else ""
+
+        if not text:
+            # 簡單問題，或 Gemini 失敗 → Ollama
+            text       = _run_ollama_direct(query, history)
+            agent_used = "ollama" if text else ""
+
+        if not text and _gemini_client is not None and route != "gemini":
+            # Ollama 也失敗 → 最終 fallback 至 Gemini
+            logger.warning("⚠️ Ollama 直接回答失敗，Fallback → Gemini")
+            text       = _run_gemini_direct(query, history)
+            agent_used = "gemini" if text else ""
+
+        if not text:
+            return jsonify({"error": "⚠️ Gemini 與 Ollama 均無法回答，請稍後再試"}), 503
+
+        new_hist = history + [
+            {"role": "user",      "content": query},
+            {"role": "assistant", "content": text},
+        ]
+        sessions[session_id] = new_hist[-MAX_HISTORY_MSGS:]
+        logger.info(f"💬 Multi 直接回答 | agent={agent_used} | route={route} | len={len(text)}")
+        return jsonify({
+            "type":          "direct_answer",
+            "answer":        text,
+            "agent_used":    agent_used,
+            "route":         f"direct/{route}",
+            "session_id":    session_id,
+            "history_count": len(new_hist) // 2,
+        })
+
+    # ── Step 1：規則層（最優先） ─────────────────────────────────
+    rule_result = _try_rule_followup(query, history)
+    if rule_result:
+        name, args = rule_result
+        raw = _execute_tool(name, args, query)
+        if raw is not None:
+            result_data, status_code = _safe_extract(raw)
+            if result_data is None:
+                return jsonify({"error": "規則工具格式異常"}), 500
+            if status_code >= 400:
+                return (raw[0] if isinstance(raw, tuple) else raw), status_code
+            _update_session(session_id, history, query, name, args, result_data)
+            result_data.update({
+                "session_id": session_id, "agent_used": "rule",
+                "rule_matched": True, "route": "rule_layer",
+                "history_count": len(sessions[session_id]) // 2,
+            })
+            logger.info(f"⚡ 規則層攔截成功 | tool={name}")
+            return jsonify(result_data)
+
+    # ── Step 2：Orchestrator 評估複雜度 ──────────────────────────
+    route = _assess_complexity(query)
+    if route == "gemini" and _gemini_client is None:
+        logger.warning("⚠️ Gemini 不可用，Orchestrator 自動改路由至 Ollama")
+        route = "ollama"
+    logger.info(f"🧭 Orchestrator 決策 | route={route}")
+
+    # ── Step 3a：Gemini 路徑（複雜推理）──────────────────────────
+    if route == "gemini":
+        decision = _run_gemini_decision(query, history)
+        if decision is not None:
+            name, args = decision
+
+            # Gemini 直接回答
+            if name == "direct_answer":
+                text = args.get("text", "")
+                new_hist = history + [
+                    {"role": "user",      "content": query},
+                    {"role": "assistant", "content": text},
+                ]
+                sessions[session_id] = new_hist[-MAX_HISTORY_MSGS:]
+                return jsonify({
+                    "type": "direct_answer", "answer": text,
+                    "agent_used": "gemini", "route": "gemini",
+                    "session_id": session_id,
+                    "history_count": len(new_hist) // 2,
+                })
+
+            raw = _execute_tool(name, args, query)
+            if raw is not None:
+                result_data, status_code = _safe_extract(raw)
+                if result_data and status_code < 400:
+                    # 深度合成：Gemini 路徑的核心價值
+                    if synthesis:
+                        synth_text = _run_gemini_synthesis(query, result_data)
+                        if synth_text:
+                            result_data["synthesis"] = synth_text
+                    _update_session(session_id, history, query, name, args, result_data)
+                    result_data.update({
+                        "llm_decision":  {"tool": name, "args": args},
+                        "session_id":    session_id,
+                        "agent_used":    "gemini",
+                        "route":         "gemini",
+                        "history_count": len(sessions[session_id]) // 2,
+                    })
+                    return jsonify(result_data)
+
+        logger.warning("⚠️ Gemini 路徑失敗，Fallback → Ollama")
+
+    # ── Step 3b：Ollama 路徑（標準查詢 / Gemini fallback）────────
+    logger.info(f"🟢 Ollama 路徑執行 | route={route}")
+    try:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "你是一個智慧搜尋助手。根據問題選擇工具：\n"
+                    "天氣→get_weather、新聞→search_news、其他→search_web。\n"
+                    "代名詞從歷史找出實體名稱；query 用精準關鍵詞。"
+                ),
+            },
+            *history,
+            {"role": "user", "content": query},
+        ]
+        resp = requests.post(
+            OLLAMA_URL,
+            json={"model": OLLAMA_MODEL, "messages": messages,
+                  "tools": AGENT_TOOLS, "stream": False,
+                  "options": {"num_predict": 8192}},
+            timeout=180,
+        )
+        resp.raise_for_status()
+        msg        = resp.json()["message"]
+        tool_calls = msg.get("tool_calls")
+
+        if tool_calls:
+            tc   = tool_calls[0]
+            name = tc["function"]["name"]
+            args = tc["function"]["arguments"]
+            if isinstance(args, str):
+                args = json.loads(args)
+            logger.info(f"🟢 Ollama 工具決策 | tool={name} | args={json.dumps(args, ensure_ascii=False)}")
+            raw = _execute_tool(name, args, query)
+            if raw:
+                result_data, status_code = _safe_extract(raw)
+                if result_data and status_code < 400:
+                    _update_session(session_id, history, query, name, args, result_data)
+                    result_data.update({
+                        "llm_decision":  {"tool": name, "args": args},
+                        "session_id":    session_id,
+                        "agent_used":    "ollama",
+                        "route":         route,
+                        "history_count": len(sessions[session_id]) // 2,
+                    })
+                    return jsonify(result_data)
+        else:
+            # Ollama 無工具呼叫 → fallback 規則引擎
+            logger.info("🟢 Ollama 無工具決策，使用規則引擎 fallback")
+            raw = smart_search()
+            result_data, status_code = _safe_extract(raw)
+            if result_data and status_code < 400:
+                result_data.update({
+                    "session_id":  session_id,
+                    "agent_used":  "ollama_fallback",
+                    "route":       route,
+                })
+                return jsonify(result_data)
+
+    except requests.exceptions.Timeout:
+        return jsonify({
+            "error": "⏱️ Ollama 推理逾時，可改用 /api/agent/gemini",
+            "hint":  "Gemini 不依賴本地 Ollama，速度更快"
+        }), 504
+    except requests.exceptions.ConnectionError:
+        # Ollama 不可用時，嘗試 Gemini 作為最後手段
+        logger.warning("⚠️ Ollama 連線失敗，嘗試 Gemini 作為最終 Fallback")
+        if _gemini_client is not None:
+            decision = _run_gemini_decision(query, history)
+            if decision and decision[0] != "direct_answer":
+                name, args = decision
+                raw = _execute_tool(name, args, query)
+                if raw:
+                    result_data, status_code = _safe_extract(raw)
+                    if result_data and status_code < 400:
+                        _update_session(session_id, history, query, name, args, result_data)
+                        result_data.update({
+                            "session_id": session_id,
+                            "agent_used": "gemini_emergency_fallback",
+                            "route": "gemini",
+                        })
+                        return jsonify(result_data)
+        return jsonify({
+            "error": "⚠️ Ollama 與 Gemini 均無法連線",
+            "hint":  "請確認 ollama serve 已啟動，或檢查 GEMINI_API_KEY"
+        }), 503
+    except Exception as e:
+        logger.error(f"❌ Multi-Agent 執行失敗: {e}")
+        return jsonify({"error": str(e)}), 500
+
+    return jsonify({"error": "Multi-Agent 執行失敗，無可用路由"}), 500
+
+
+@app.route("/api/agent/status", methods=["GET"])
+def agent_status():
+    """🔍 查詢各 Agent 狀態（Gemini / Ollama 是否可用）"""
+    ollama_ok = False
+    try:
+        r = requests.get("http://localhost:11434/api/tags", timeout=3)
+        ollama_ok = r.ok
+    except Exception:
+        pass
+
+    return jsonify({
+        "gemini": {
+            "available": _gemini_client is not None,
+            "model":     GEMINI_MODEL if _gemini_client else None,
+            "key_set":   bool(GEMINI_API_KEY),
+        },
+        "ollama": {
+            "available": ollama_ok,
+            "model":     OLLAMA_MODEL,
+            "url":       OLLAMA_URL,
+        },
+        "endpoints": {
+            "/api/agent":        "Ollama Agent（現有，不變）",
+            "/api/agent/gemini": "Gemini Agent（新）",
+            "/api/agent/multi":  "Multi-Agent Orchestrator（新）",
+            "/api/agent/status": "Agent 狀態查詢（新）",
+        },
+    })
 
 
 if __name__ == "__main__":

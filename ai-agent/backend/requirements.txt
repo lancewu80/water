@@ -2,3 +2,5 @@ flask
 flask-cors
 requests
 ddgs
+google-genai
+python-dotenv
