@@ -1,7 +1,7 @@
-# 🤖 AI 智慧搜尋系統
+# 🤖 AI 智慧搜尋 + 知識庫系統
 
-一套結合自然語言意圖辨識、多輪對話記憶與 **Multi-Agent 協作**的 Agent 應用。
-單一搜尋框搭配四種模式，從毫秒級規則引擎到 Gemini AI 深度分析，按需選用。
+一套結合自然語言意圖辨識、多輪對話記憶、**Multi-Agent 協作**與 **RAG 知識庫**的 Agent 應用。
+單一搜尋框搭配四種模式，從毫秒級規則引擎到 Gemini AI 深度分析；搭配知識庫管理頁面，讓 AI 回答時自動引用企業內部文件。
 
 ---
 
@@ -26,6 +26,17 @@
 
 > **Multi-AI 路由邏輯**：含「分析/比較/為什麼/解釋/影響…」→ Gemini；其餘（寫程式/問答/天氣）→ Ollama
 
+### 🗄️ RAG 知識庫
+
+| 功能 | 說明 |
+|------|------|
+| **上傳文件** | 拖曳 `.pdf` / `.docx`，自動切塊、向量化索引 |
+| **HTML 頁面** | 富文字編輯器（TipTap）直接撰寫，即時索引 |
+| **語意搜尋** | 輸入自然語言，找最相關的知識片段 |
+| **原始格式預覽** | PDF → 瀏覽器原生閱讀器；DOCX → HTML 渲染 |
+| **下載** | 一鍵下載原始 PDF / DOCX 檔案 |
+| **AI 整合** | 勾選「🗄️ 使用知識庫」，AI 回答時自動注入相關內容（RAG） |
+
 ---
 
 ## 環境需求
@@ -35,7 +46,7 @@
 | Python | 3.10+ | 後端執行環境 |
 | Node.js | 18+ | 前端建構工具 |
 | npm | 9+ | 套件管理 |
-| Ollama | 最新版 | 本地 LLM（Ollama / Multi-AI 模式需要） |
+| Ollama | 最新版 | 本地 LLM 及 Embedding（Ollama / Multi-AI / 知識庫模式需要） |
 | Gemini API Key | — | Google AI Studio 免費申請（Gemini / Multi-AI 模式需要） |
 
 ---
@@ -56,9 +67,14 @@ pip install -r requirements.txt
 flask
 flask-cors
 requests
-duckduckgo-search
+ddgs
 google-genai
 python-dotenv
+# RAG 知識庫（可選，不安裝則知識庫功能停用）
+chromadb
+python-docx
+PyMuPDF
+mammoth
 ```
 
 建立 `.env` 檔（Gemini 模式需要）：
@@ -69,14 +85,19 @@ GEMINI_API_KEY=你的Gemini_API_Key
 
 > 取得 Gemini API Key：前往 https://aistudio.google.com/ → Get API Key → 免費 Free Tier 即可
 
-### Step 2：安裝並啟動 Ollama（Ollama / Multi-AI 模式）
+### Step 2：安裝並啟動 Ollama
 
 ```bash
 # 下載安裝 Ollama：https://ollama.com/
-# 拉取模型（約 9GB）
+
+# AI 對話模型（約 9GB）
 ollama pull gemma4:e4b
 
+# RAG Embedding 模型（知識庫功能需要，約 274MB）
+ollama pull nomic-embed-text
+
 # 確認 Ollama 服務已在 http://localhost:11434 執行
+ollama serve
 ```
 
 ### Step 3：前端設定
@@ -84,7 +105,7 @@ ollama pull gemma4:e4b
 ```bash
 cd ai-agent/frontend
 
-# 安裝 Node 套件（包含 react-markdown、remark-gfm）
+# 安裝 Node 套件
 npm install
 ```
 
@@ -136,7 +157,7 @@ LLM 自動決策使用哪個工具，並支援**多輪對話記憶**：
 第2輪：明天呢？        → 仍查台北（記得上下文）
 第3輪：那東京呢？      → 查詢東京天氣
 ```
-也可以問不需要工具的問題，Ollama 直接回答（direct answer）：
+也可以問不需要工具的問題，Ollama 直接回答：
 ```
 寫一個 Java binary search
 用繁體中文解釋 Python 的 GIL
@@ -145,7 +166,7 @@ LLM 自動決策使用哪個工具，並支援**多輪對話記憶**：
 ### 🔷 Gemini 模式
 自動啟用深度合成（synthesis），適合比較分析：
 ```
-Acer Predator Helios Neo 16 vs Acer Nitro AN515 3A 遊戲效能比較
+Acer Predator Helios Neo 16 vs Acer Nitro AN515 遊戲效能比較
 iPhone 16 和 Samsung S25 哪個更適合拍照？
 ```
 回傳結果包含 **AI 深度分析報告**（含規格比較表格、效能分析、推薦結論）。
@@ -159,6 +180,26 @@ Orchestrator 依複雜度自動路由：
 為什麼量子計算很重要  → Gemini 回答（複雜推理）
 ```
 
+### 🗄️ 知識庫使用流程
+
+**1. 建立知識庫內容**
+
+點擊右上角「🗄️ 知識庫」按鈕進入管理頁面：
+- **上傳文件**：拖曳 `.pdf` 或 `.docx` 到上傳區，系統自動切塊並向量化
+- **新增頁面**：使用 TipTap 富文字編輯器撰寫 HTML 頁面（適合撰寫 SOP、FAQ 等）
+
+**2. 搜尋知識庫**
+
+切換到「🔍 語意搜尋」頁簽，輸入自然語言，找到相關知識片段，點擊「🔍 查看全文」可預覽完整文件。
+
+**3. 讓 AI 使用知識庫**
+
+在主搜尋頁面勾選「🗄️ 使用知識庫」，AI 回答時會自動：
+1. 將問題向量化
+2. 搜尋最相關的知識片段（Top-5）
+3. 將片段注入 LLM System Prompt
+4. 生成引用知識庫內容的回答
+
 ---
 
 ## 專案結構
@@ -167,12 +208,17 @@ Orchestrator 依複雜度自動路由：
 ai-agent/
 ├── backend/
 │   ├── app.py              ← Flask API 主程式
-│   │                         ・/api/search         快速搜尋（規則引擎）
-│   │                         ・/api/agent          Ollama LLM Agent
-│   │                         ・/api/agent/gemini   Gemini Agent
-│   │                         ・/api/agent/multi    Multi-Agent Orchestrator
-│   │                         ・/api/agent/status   Agent 狀態查詢
-│   │                         ・/api/session/clear  清除對話記憶
+│   │                         ・/api/search            快速搜尋（規則引擎）
+│   │                         ・/api/agent             Ollama LLM Agent
+│   │                         ・/api/agent/gemini      Gemini Agent
+│   │                         ・/api/agent/multi       Multi-Agent Orchestrator
+│   │                         ・/api/agent/status      Agent 狀態查詢
+│   │                         ・/api/session/clear     清除對話記憶
+│   │                         ・/api/kb/*              知識庫 CRUD & 搜尋
+│   ├── kb.py               ← 知識庫管理（ChromaDB + Ollama Embedding）
+│   ├── extractors.py       ← 文字提取（PDF / DOCX / HTML → 純文字 + 分塊）
+│   ├── kb_store/           ← ChromaDB 向量資料庫（自動建立）
+│   ├── uploads/            ← 原始上傳檔案（PDF/DOCX，供預覽/下載）
 │   ├── requirements.txt    ← Python 依賴
 │   └── .env                ← GEMINI_API_KEY（不納入版控）
 ├── frontend/
@@ -180,15 +226,11 @@ ai-agent/
 │   ├── vite.config.js      ← /api Proxy 設定
 │   ├── index.html
 │   └── src/
-│       ├── App.jsx          ← 主邏輯：4 模式選擇、路由、Markdown 渲染
+│       ├── App.jsx          ← 主邏輯：4 模式、知識庫切換、Markdown 渲染
 │       ├── App.css
-│       └── components/
-│           ├── SearchBox.jsx
-│           ├── WeatherCard.jsx
-│           ├── NewsCard.jsx
-│           └── WebResultCard.jsx
-├── ai-agent-simple.py      ← 原始 Ollama Agent 範例
-├── ai-agent-weather.py     ← 天氣 Agent 範例
+│       ├── kb.css           ← 知識庫頁面樣式
+│       └── pages/
+│           └── KnowledgeBase.jsx  ← 知識庫管理頁面
 ├── 系統設計文件.docx        ← 完整架構設計文件
 └── README.md               ← 本檔案
 ```
@@ -197,17 +239,36 @@ ai-agent/
 
 ## API 端點
 
+### 搜尋 / Agent
+
 | 方法 | 路徑 | 模式 | 說明 | 主要 Body 參數 |
 |------|------|------|------|--------------|
 | POST | `/api/search` | ⚡ 快速 | 關鍵字規則引擎 | `query`, `lang` |
-| POST | `/api/agent` | 🧠 Ollama | Ollama LLM Agent | `query`, `session_id` |
-| POST | `/api/agent/gemini` | 🔷 Gemini | Gemini Agent | `query`, `session_id`, `synthesis` |
-| POST | `/api/agent/multi` | 🔀 Multi-AI | Orchestrator | `query`, `session_id`, `synthesis`, `direct` |
+| POST | `/api/agent` | 🧠 Ollama | Ollama LLM Agent | `query`, `session_id`, `direct`, `use_kb` |
+| POST | `/api/agent/gemini` | 🔷 Gemini | Gemini Agent | `query`, `session_id`, `synthesis`, `direct`, `use_kb` |
+| POST | `/api/agent/multi` | 🔀 Multi-AI | Orchestrator | `query`, `session_id`, `synthesis`, `direct`, `use_kb` |
 | GET  | `/api/agent/status` | — | Agent 狀態 / 可用性 | — |
 | POST | `/api/session/clear` | — | 清除對話記憶 | `session_id` |
 | GET  | `/api/weather` | — | 直接查天氣 | `?city=台北` |
 | GET  | `/api/news` | — | 直接搜尋新聞 | `?q=關鍵字&lang=zh` |
 | GET  | `/api/web` | — | 直接網路搜尋 | `?q=關鍵字` |
+
+### 知識庫（RAG）
+
+| 方法 | 路徑 | 說明 |
+|------|------|------|
+| GET  | `/api/kb/stats` | 知識庫統計（文件數、chunk 數、模型） |
+| POST | `/api/kb/upload` | 上傳 PDF / DOCX 並向量化索引 |
+| GET  | `/api/kb/documents` | 列出所有文件 |
+| GET  | `/api/kb/documents/<id>/chunks` | 取得文件文字片段 |
+| GET  | `/api/kb/documents/<id>/preview` | 預覽原始文件（PDF串流 / DOCX轉HTML） |
+| GET  | `/api/kb/documents/<id>/download` | 下載原始文件 |
+| DELETE | `/api/kb/documents/<id>` | 刪除文件（含原始檔） |
+| POST | `/api/kb/pages` | 新增 HTML 頁面 |
+| GET  | `/api/kb/pages/<id>` | 取得頁面 HTML 內容 |
+| PUT  | `/api/kb/pages/<id>` | 更新頁面（重新向量化） |
+| DELETE | `/api/kb/pages/<id>` | 刪除頁面 |
+| POST | `/api/kb/search` | 語意搜尋 | `query`, `top_k` |
 
 ### 回應欄位說明
 
@@ -240,6 +301,22 @@ AI 回答支援完整 GFM（GitHub Flavored Markdown）渲染：
 
 ## 常見問題
 
+### Q: 知識庫需要什麼額外環境？
+需要 Ollama 執行 `nomic-embed-text` 模型（Embedding）：
+```bash
+ollama pull nomic-embed-text   # 約 274MB
+```
+Python 套件（已含於 requirements.txt）：
+```bash
+pip install chromadb python-docx PyMuPDF mammoth
+```
+
+### Q: DOCX 預覽顯示「mammoth 未安裝」？
+```bash
+pip install mammoth
+```
+安裝完成後**不需重啟** Flask，下次請求自動生效。
+
 ### Q: Gemini API Key 在哪申請？
 前往 https://aistudio.google.com/ → 登入 Google 帳號 → Get API Key → 建立 Free Tier Key。
 每天免費額度：Gemini 2.5 Flash 約 500 次請求。
@@ -247,8 +324,9 @@ AI 回答支援完整 GFM（GitHub Flavored Markdown）渲染：
 ### Q: Ollama 啟動後 AI 模式仍出現錯誤？
 確認 `ollama serve` 已在背景執行，且模型已下載：
 ```bash
-ollama list          # 列出已下載模型
-ollama pull gemma4:e4b   # 重新拉取（如果未顯示）
+ollama list              # 列出已下載模型
+ollama pull gemma4:e4b   # 重新拉取對話模型
+ollama pull nomic-embed-text  # 重新拉取 Embedding 模型
 ```
 
 ### Q: Multi-AI 模式每次都走 Gemini，Ollama 沒被使用？
@@ -306,8 +384,10 @@ server {
 
 ## 相關文件
 
-- 📄 [系統設計文件.docx](./系統設計文件.docx) — 完整架構設計、API 規格、Multi-Agent 設計說明
+- 📄 [系統設計文件.docx](./系統設計文件.docx) — 完整架構設計、API 規格、Multi-Agent 與 RAG 設計說明
 - 🤖 [Ollama](https://ollama.com/) — 本地 LLM 執行環境
 - 🔷 [Google AI Studio](https://aistudio.google.com/) — Gemini API Key 申請
 - 🌐 [Open-Meteo 文件](https://open-meteo.com/en/docs) — 天氣 API
 - 🔍 [duckduckgo-search PyPI](https://pypi.org/project/duckduckgo-search/) — 搜尋套件
+- 🗄️ [ChromaDB 文件](https://docs.trychroma.com/) — 向量資料庫
+- 📦 [nomic-embed-text](https://ollama.com/library/nomic-embed-text) — Embedding 模型

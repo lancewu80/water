@@ -5,6 +5,7 @@ import SearchBox from "./components/SearchBox";
 import WeatherCard from "./components/WeatherCard";
 import NewsCard from "./components/NewsCard";
 import WebResultCard from "./components/WebResultCard";
+import KnowledgeBase from "./pages/KnowledgeBase";
 
 // ── 前端意圖偵測（快速模式用）────────────────────────────────
 const WEATHER_KW = [
@@ -225,6 +226,7 @@ function ResultView({ data, showHeader = true, isAiMode = false }) {
 }
 
 export default function App() {
+  const [page,          setPage]          = useState("search"); // "search" | "kb"
   const [query,         setQuery]         = useState("");
   const [intent,        setIntent]        = useState(null);
   const [lang,          setLang]          = useState("zh");
@@ -232,6 +234,7 @@ export default function App() {
   const [error,         setError]         = useState(null);
   const [agentMode,     setAgentMode]     = useState("fast");  // "fast"|"ollama"|"gemini"|"multi"
   const [directMode,    setDirectMode]    = useState(false);   // false=搜尋 true=直接回答
+  const [useKb,         setUseKb]         = useState(false);   // 是否注入知識庫上下文
 
   // ── 結果 & 對話記憶 ──────────────────────────────────────────
   const [currentResult, setCurrentResult] = useState(null);
@@ -255,8 +258,12 @@ export default function App() {
       body.session_id = sessionId;
       if (directMode) {
         body.direct = true;
+        if (useKb) body.use_kb = true;
       } else if (modeConfig.synthesis) {
         body.synthesis = true;
+        if (useKb) body.use_kb = true;
+      } else {
+        if (useKb) body.use_kb = true;
       }
     }
 
@@ -292,7 +299,7 @@ export default function App() {
     } finally {
       setLoading(false);
     }
-  }, [query, lang, agentMode, sessionId, modeConfig, isAiMode, directMode]);
+  }, [query, lang, agentMode, sessionId, modeConfig, isAiMode, directMode, useKb]);
 
   const clearConversation = useCallback(async () => {
     if (isAiMode) {
@@ -317,8 +324,8 @@ export default function App() {
     setError(null);
     setSessionId(genSessionId());
     setActiveTab("result");
-    // fast 模式不支援直接回答
-    if (newMode === "fast") setDirectMode(false);
+    // fast 模式不支援直接回答 / 知識庫
+    if (newMode === "fast") { setDirectMode(false); setUseKb(false); }
   };
 
   const handleTag = (tag) => { const q = `${tag} 新聞`; setQuery(q); search(q, lang); };
@@ -332,14 +339,47 @@ export default function App() {
   const agentUsed    = currentResult?.agent_used;
   const agentUsedMeta = agentUsed ? (AGENT_USED_META[agentUsed] ?? { icon: "🤖", color: "#6b7280", label: agentUsed }) : null;
 
+  // ── 知識庫頁面 ─────────────────────────────────────────────
+  if (page === "kb") {
+    return (
+      <div className="app">
+        {/* 頂部導覽列：使用緊湊 padding，避免與 kb-header 重疊 */}
+        <header className="header" style={{ padding: "0.9rem 1.5rem" }}>
+          <div className="header-inner" style={{ flexDirection: "row", alignItems: "center", justifyContent: "space-between", gap: "1rem" }}>
+            <div style={{ display: "flex", alignItems: "center", gap: "0.75rem" }}>
+              <span style={{ fontSize: "1.5rem" }}>🗄️</span>
+              <h1 className="title" style={{ fontSize: "1.1rem", margin: 0 }}>知識庫管理</h1>
+            </div>
+            <nav className="app-nav">
+              <button className="app-nav-btn" onClick={() => setPage("search")}>⬅️ 返回搜尋</button>
+            </nav>
+          </div>
+        </header>
+        {/* marginTop: 0 取消搜尋頁的 -2rem 浮出效果，讓內容從 header 底部正常開始 */}
+        <main className="main" style={{ marginTop: "1.5rem" }}>
+          <KnowledgeBase />
+        </main>
+      </div>
+    );
+  }
+
   return (
     <div className={`app ${isAiMode ? "ai-mode" : ""} mode-${agentMode}`}>
       {/* ── Header ── */}
       <header className="header">
         <div className="header-inner">
-          <span className="logo">{modeConfig.icon}</span>
-          <h1 className="title">AI 智慧搜尋</h1>
-          <p className="subtitle">{modeConfig.hint}</p>
+          <div style={{ display: "flex", alignItems: "center", gap: "0.6rem", flex: 1, minWidth: 0 }}>
+            <span className="logo">{modeConfig.icon}</span>
+            <div style={{ minWidth: 0 }}>
+              <h1 className="title">AI 智慧搜尋</h1>
+              <p className="subtitle">{modeConfig.hint}</p>
+            </div>
+          </div>
+          <nav className="app-nav">
+            <button className="app-nav-btn app-nav-kb" onClick={() => setPage("kb")} title="管理知識庫文件">
+              🗄️ 知識庫
+            </button>
+          </nav>
         </div>
       </header>
 
@@ -402,6 +442,34 @@ export default function App() {
                   AI 憑自身知識回答，不查網路・適合知識問答、程式、翻譯
                 </span>
               )}
+            </div>
+          )}
+
+          {/* ── 知識庫增強（AI 模式才顯示）── */}
+          {isAiMode && (
+            <div className="kb-toggle-row">
+              <label className="kb-toggle-label">
+                <input
+                  type="checkbox"
+                  className="kb-toggle-check"
+                  checked={useKb}
+                  onChange={(e) => setUseKb(e.target.checked)}
+                />
+                <span className="kb-toggle-icon">🗄️</span>
+                <span>使用知識庫</span>
+              </label>
+              {useKb && (
+                <span className="kb-toggle-hint">
+                  AI 回答時將自動搜尋知識庫相關內容作為參考
+                </span>
+              )}
+              <button
+                className="kb-toggle-goto"
+                onClick={() => setPage("kb")}
+                title="管理知識庫文件"
+              >
+                管理 →
+              </button>
             </div>
           )}
 

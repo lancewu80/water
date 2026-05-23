@@ -352,8 +352,9 @@ def agent_search():
     query      = data.get("query", "").strip()
     session_id = data.get("session_id", "") or str(uuid.uuid4())
     direct     = data.get("direct", False)   # True = 直接回答，不呼叫工具
+    use_kb     = data.get("use_kb",  False)  # True = 注入知識庫 context
     logger.info(f"\n{'='*80}")
-    logger.info(f"🧠 AI 模式搜尋 | session_id={session_id[:8]}... | query='{query}' | direct={direct}")
+    logger.info(f"🧠 AI 模式搜尋 | session_id={session_id[:8]}... | query='{query}' | direct={direct} | use_kb={use_kb}")
 
     if not query:
         return jsonify({"error": "請輸入搜尋內容"}), 400
@@ -363,7 +364,8 @@ def agent_search():
 
     # ── 直接回答模式（跳過工具，直接問 Ollama）────────────────────
     if direct:
-        text = _run_ollama_direct(query, history)
+        kb_ctx = _get_kb_context(query) if use_kb else ""
+        text = _run_ollama_direct(query, history, kb_context=kb_ctx)
         if not text:
             return jsonify({"error": "⚠️ Ollama 無回應，請確認 ollama serve 已啟動"}), 503
         new_hist = history + [
@@ -1320,13 +1322,36 @@ def _run_gemini_synthesis(query: str, tool_result: dict) -> str:
         return ""
 
 
-def _run_ollama_direct(query: str, history: list) -> str:
+def _get_kb_context(query: str) -> str:
+    """
+    安全地從知識庫取得 RAG context。
+    若 KB 未安裝 / 空庫，回傳空字串，不影響正常回答。
+    """
+    try:
+        kb, err = _kb()
+        if not kb:
+            return ""
+        ctx = kb.build_rag_context(query)
+        if ctx:
+            logger.info(f"📚 KB context 取得成功 | query='{query[:30]}' | len={len(ctx)}")
+        return ctx
+    except Exception as e:
+        logger.warning(f"⚠️ KB context 取得失敗（不影響回答）: {e}")
+        return ""
+
+
+def _run_ollama_direct(query: str, history: list, kb_context: str = "") -> str:
     """
     Ollama 直接回答模式（不呼叫任何工具）
     讓 Ollama 憑自身知識直接回答，適合一般知識、閒聊、程式、翻譯等問題。
+    kb_context: 若非空，會附加至 system prompt 作為 RAG 參考資料。
     Returns: 回答文字，失敗時回傳 ""
     """
     try:
+        kb_section = (
+            f"\n\n以下是從知識庫檢索到的相關資料，請優先參考：\n{kb_context}"
+            if kb_context else ""
+        )
         messages = [
             {
                 "role": "system",
@@ -1336,6 +1361,7 @@ def _run_ollama_direct(query: str, history: list) -> str:
                     "若問題涉及需要即時資料（如今天天氣、最新股價、最新新聞），"
                     "請誠實告知你的知識有截止日期，建議用戶切換至「搜尋模式」取得最新資訊。\n"
                     "適當時可使用 Markdown 格式（標題、條列、粗體）提升可讀性。"
+                    + kb_section
                 ),
             },
             *history,
@@ -1362,15 +1388,20 @@ def _run_ollama_direct(query: str, history: list) -> str:
         return ""
 
 
-def _run_gemini_direct(query: str, history: list) -> str:
+def _run_gemini_direct(query: str, history: list, kb_context: str = "") -> str:
     """
     Gemini 直接回答模式（不呼叫任何工具）
     讓 Gemini 憑自身知識直接回答，適合知識問答、分析推理等問題。
+    kb_context: 若非空，會附加至 system prompt 作為 RAG 參考資料。
     Returns: 回答文字，失敗時回傳 ""
     """
     if _gemini_client is None:
         return ""
     try:
+        kb_section = (
+            f"\n\n以下是從知識庫檢索到的相關資料，請優先參考：\n{kb_context}"
+            if kb_context else ""
+        )
         gemini_hist = _to_gemini_history(history)
         chat = _gemini_client.chats.create(
             model=GEMINI_MODEL,
@@ -1381,6 +1412,7 @@ def _run_gemini_direct(query: str, history: list) -> str:
                     "若問題涉及需要即時資料（如今天天氣、最新股價），"
                     "請誠實告知並建議用戶切換至「搜尋模式」。\n"
                     "使用 Markdown 格式（## 標題、- 條列、**粗體**）提升可讀性。"
+                    + kb_section
                 ),
                 temperature=0.7,
                 max_output_tokens=8192,   # 提高上限，避免截斷長篇回答
@@ -1414,9 +1446,10 @@ def gemini_agent_search():
     session_id = data.get("session_id", "") or str(uuid.uuid4())
     synthesis  = data.get("synthesis", False)  # 是否啟用 Gemini 深度合成
     direct     = data.get("direct", False)     # True = 直接回答，不呼叫工具
+    use_kb     = data.get("use_kb",  False)    # True = 注入知識庫 context
 
     logger.info(f"\n{'='*80}")
-    logger.info(f"🔷 Gemini Agent | session={session_id[:8]} | query='{query}' | synthesis={synthesis} | direct={direct}")
+    logger.info(f"🔷 Gemini Agent | session={session_id[:8]} | query='{query}' | synthesis={synthesis} | direct={direct} | use_kb={use_kb}")
 
     if not query:
         return jsonify({"error": "請輸入搜尋內容"}), 400
@@ -1427,7 +1460,8 @@ def gemini_agent_search():
 
     # ── 直接回答模式（跳過工具，直接問 Gemini）────────────────────
     if direct:
-        text = _run_gemini_direct(query, history)
+        kb_ctx = _get_kb_context(query) if use_kb else ""
+        text = _run_gemini_direct(query, history, kb_context=kb_ctx)
         if not text:
             return jsonify({"error": "⚠️ Gemini 無回應，請稍後再試或確認 API Key"}), 503
         new_hist = history + [
@@ -1527,9 +1561,10 @@ def multi_agent_search():
     session_id = data.get("session_id", "") or str(uuid.uuid4())
     synthesis  = data.get("synthesis", True)   # 複雜查詢預設啟用
     direct     = data.get("direct", False)     # True = 直接回答，不呼叫工具
+    use_kb     = data.get("use_kb",  False)    # True = 注入知識庫 context
 
     logger.info(f"\n{'='*80}")
-    logger.info(f"🔀 Multi-Agent | session={session_id[:8]} | query='{query}' | direct={direct}")
+    logger.info(f"🔀 Multi-Agent | session={session_id[:8]} | query='{query}' | direct={direct} | use_kb={use_kb}")
 
     if not query:
         return jsonify({"error": "請輸入搜尋內容"}), 400
@@ -1547,22 +1582,24 @@ def multi_agent_search():
             route = "ollama"
         logger.info(f"🧭 Direct 模式路由 | route={route}")
 
+        kb_ctx = _get_kb_context(query) if use_kb else ""
+
         text       = ""
         agent_used = ""
 
         if route == "gemini":
-            text       = _run_gemini_direct(query, history)
+            text       = _run_gemini_direct(query, history, kb_context=kb_ctx)
             agent_used = "gemini" if text else ""
 
         if not text:
             # 簡單問題，或 Gemini 失敗 → Ollama
-            text       = _run_ollama_direct(query, history)
+            text       = _run_ollama_direct(query, history, kb_context=kb_ctx)
             agent_used = "ollama" if text else ""
 
         if not text and _gemini_client is not None and route != "gemini":
             # Ollama 也失敗 → 最終 fallback 至 Gemini
             logger.warning("⚠️ Ollama 直接回答失敗，Fallback → Gemini")
-            text       = _run_gemini_direct(query, history)
+            text       = _run_gemini_direct(query, history, kb_context=kb_ctx)
             agent_used = "gemini" if text else ""
 
         if not text:
@@ -1773,6 +1810,295 @@ def agent_status():
             "/api/agent/status": "Agent 狀態查詢（新）",
         },
     })
+
+
+# ══════════════════════════════════════════════════════════════
+#  知識庫（RAG）API
+# ══════════════════════════════════════════════════════════════
+import importlib, sys
+
+def _kb():
+    """
+    懶載入 kb 模組（避免啟動時 chromadb 未安裝就崩潰）。
+    注意：catch Exception（不只 ImportError），避免：
+      - TypeError：chromadb.PersistentClient 是 function 而非 class，
+        `X | None` annotation 在舊版 Python 3.10 以前或特定版本的 chromadb
+        會引發 TypeError（PEP 563 / from __future__ import annotations 可解決）
+      - 任何其他載入期間例外讓 Flask 回傳 HTML 500
+    若模組已在 sys.modules 但為部分初始化（previous failed import 殘留），
+    偵測到後清除並重試。
+    """
+    mod = sys.modules.get("kb")
+    # 殘留的部分初始化模組沒有 kb_stats 屬性 → 清除重試
+    if mod is not None and not hasattr(mod, "kb_stats"):
+        del sys.modules["kb"]
+        mod = None
+
+    if mod is None:
+        try:
+            import kb as _kb_mod
+            sys.modules["kb"] = _kb_mod
+        except Exception as e:
+            # 確保失敗的部分初始化模組不殘留在 sys.modules
+            sys.modules.pop("kb", None)
+            return None, str(e)
+    return sys.modules["kb"], None
+
+
+@app.route("/api/kb/stats", methods=["GET"])
+def kb_stats():
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": f"KB 模組未載入：{err}"}), 503
+    return jsonify(kb.kb_stats())
+
+
+@app.route("/api/kb/upload", methods=["POST"])
+def kb_upload():
+    """上傳 docx / pdf 文件並索引，同時永久保存原始檔案供預覽/下載"""
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": f"KB 模組未載入：{err}"}), 503
+
+    if "file" not in request.files:
+        return jsonify({"error": "請選擇要上傳的檔案"}), 400
+
+    f    = request.files["file"]
+    name = f.filename or "未命名"
+    ext  = name.rsplit(".", 1)[-1].lower() if "." in name else ""
+    if ext not in ("pdf", "docx"):
+        return jsonify({"error": "僅支援 .docx 和 .pdf 格式"}), 400
+
+    import tempfile, shutil
+    # 預先產生 source_id，用於永久儲存原始檔案
+    source_id  = str(uuid.uuid4())
+    perm_path  = os.path.join(kb.UPLOADS_DIR, f"{source_id}.{ext}")
+
+    # Windows 相容性：mkstemp 建立後立刻關閉 fd，
+    # 避免 NamedTemporaryFile 的 with 區塊鎖住檔案，
+    # 造成 f.save() 無法寫入（PermissionError WinError 32）
+    fd, tmp_path = tempfile.mkstemp(suffix=f".{ext}")
+    os.close(fd)
+
+    try:
+        f.save(tmp_path)
+
+        if ext == "docx":
+            from extractors import extract_text_docx
+            text = extract_text_docx(tmp_path)
+        else:
+            from extractors import extract_text_pdf
+            text = extract_text_pdf(tmp_path)
+
+        if not text.strip():
+            return jsonify({"error": "無法從檔案提取文字，請確認檔案內容"}), 422
+
+        # 複製到永久儲存位置（供預覽 / 下載用）
+        shutil.copy2(tmp_path, perm_path)
+        logger.info(f"📁 原始檔案已儲存：{perm_path}")
+
+        title  = request.form.get("title", name)
+        result = kb.add_document(
+            title=title, text=text, source_type="document",
+            source_id=source_id,
+            extra_meta={"original_ext": ext, "original_name": name},
+        )
+        return jsonify(result)
+    except Exception as e:
+        logger.error(f"KB upload error: {e}", exc_info=True)
+        # 清理永久檔案（若已建立）
+        try:
+            if os.path.exists(perm_path):
+                os.unlink(perm_path)
+        except OSError:
+            pass
+        return jsonify({"error": str(e)}), 500
+    finally:
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+
+
+@app.route("/api/kb/documents", methods=["GET"])
+def kb_list():
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+    return jsonify(kb.list_documents())
+
+
+@app.route("/api/kb/documents/<source_id>/chunks", methods=["GET"])
+def kb_get_doc_chunks(source_id):
+    """取得指定文件的所有文字片段（供前端全文檢視）"""
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+    chunks = kb.get_document_chunks(source_id)
+    return jsonify({"source_id": source_id, "chunks": chunks})
+
+
+@app.route("/api/kb/documents/<source_id>/preview", methods=["GET"])
+def kb_preview_doc(source_id):
+    """
+    預覽原始文件：
+      PDF  → 直接 send_file（瀏覽器 PDF 檢視器）
+      DOCX → mammoth 轉 HTML，回傳完整 HTML 頁面（嵌入 iframe）
+    """
+    from flask import send_file
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+
+    meta = kb.get_document_meta(source_id)
+    if not meta:
+        return jsonify({"error": "找不到文件 metadata"}), 404
+
+    ext       = meta.get("original_ext", "").lower()
+    file_path = os.path.join(kb.UPLOADS_DIR, f"{source_id}.{ext}")
+
+    if not os.path.exists(file_path):
+        return jsonify({"error": "原始檔案不存在（此文件為舊版上傳，未儲存原始檔）"}), 404
+
+    if ext == "pdf":
+        return send_file(file_path, mimetype="application/pdf")
+
+    elif ext == "docx":
+        try:
+            import mammoth
+            with open(file_path, "rb") as docx_file:
+                result = mammoth.convert_to_html(docx_file)
+            html = f"""<!DOCTYPE html>
+<html lang="zh-TW">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<style>
+body {{
+  font-family: "Segoe UI", "Microsoft JhengHei", Arial, sans-serif;
+  line-height: 1.75; padding: 1.75rem 2rem;
+  color: #1e293b; max-width: 820px; margin: 0 auto;
+}}
+h1,h2,h3,h4 {{ color: #111827; margin: 0.75em 0 0.35em; font-weight: 700; }}
+h1 {{ font-size: 1.5em; }} h2 {{ font-size: 1.25em; }} h3 {{ font-size: 1.05em; }}
+p  {{ margin: 0.45em 0; }}
+ul,ol {{ padding-left: 1.6em; margin: 0.4em 0; }}
+li {{ margin: 0.2em 0; }}
+table {{ border-collapse: collapse; width: 100%; margin: 0.85em 0; font-size: 0.9em; }}
+td,th {{ border: 1px solid #d1d5db; padding: 0.45em 0.75em; text-align: left; }}
+th {{ background: #f3f4f6; font-weight: 600; }}
+img {{ max-width: 100%; height: auto; }}
+</style>
+</head>
+<body>{result.value}</body>
+</html>"""
+            return html, 200, {"Content-Type": "text/html; charset=utf-8"}
+        except ImportError:
+            return jsonify({"error": "mammoth 未安裝，請執行：pip install mammoth"}), 503
+        except Exception as e:
+            return jsonify({"error": f"DOCX 轉換失敗：{e}"}), 500
+
+    else:
+        return jsonify({"error": f"不支援的格式：{ext}"}), 400
+
+
+@app.route("/api/kb/documents/<source_id>/download", methods=["GET"])
+def kb_download_doc(source_id):
+    """下載原始文件（以附件方式，會觸發瀏覽器存檔）"""
+    from flask import send_file
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+
+    meta = kb.get_document_meta(source_id)
+    if not meta:
+        return jsonify({"error": "找不到文件 metadata"}), 404
+
+    ext           = meta.get("original_ext", "").lower()
+    original_name = meta.get("original_name", f"{source_id}.{ext}")
+    file_path     = os.path.join(kb.UPLOADS_DIR, f"{source_id}.{ext}")
+
+    if not os.path.exists(file_path):
+        return jsonify({"error": "原始檔案不存在（此文件為舊版上傳，未儲存原始檔）"}), 404
+
+    return send_file(file_path, as_attachment=True, download_name=original_name)
+
+
+@app.route("/api/kb/documents/<source_id>", methods=["DELETE"])
+def kb_delete_doc(source_id):
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+    deleted = kb.delete_document(source_id)   # kb.delete_document 已處理原始檔清除
+    return jsonify({"deleted": deleted, "source_id": source_id})
+
+
+# ── HTML 頁面 CRUD ───────────────────────────────────────────
+
+@app.route("/api/kb/pages", methods=["POST"])
+def kb_create_page():
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+    data  = request.get_json(force=True)
+    title = data.get("title", "").strip()
+    html  = data.get("html", "").strip()
+    if not title:
+        return jsonify({"error": "請填寫標題"}), 400
+    if not html:
+        return jsonify({"error": "請填寫內容"}), 400
+    result = kb.create_page(title=title, html=html)
+    return jsonify(result), 201
+
+
+@app.route("/api/kb/pages/<source_id>", methods=["GET"])
+def kb_get_page(source_id):
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+    page = kb.get_page(source_id)
+    if not page:
+        return jsonify({"error": "找不到指定頁面"}), 404
+    return jsonify(page)
+
+
+@app.route("/api/kb/pages/<source_id>", methods=["PUT"])
+def kb_update_page(source_id):
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+    data  = request.get_json(force=True)
+    title = data.get("title", "").strip()
+    html  = data.get("html", "").strip()
+    if not title or not html:
+        return jsonify({"error": "標題與內容不可為空"}), 400
+    result = kb.update_page(source_id=source_id, title=title, html=html)
+    return jsonify(result)
+
+
+@app.route("/api/kb/pages/<source_id>", methods=["DELETE"])
+def kb_delete_page(source_id):
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+    deleted = kb.delete_page(source_id)
+    return jsonify({"deleted": deleted, "source_id": source_id})
+
+
+# ── 語意搜尋（獨立，可前端直接呼叫）────────────────────────
+
+@app.route("/api/kb/search", methods=["POST"])
+def kb_search():
+    kb, err = _kb()
+    if not kb:
+        return jsonify({"error": err}), 503
+    data  = request.get_json(force=True)
+    query = data.get("query", "").strip()
+    top_k = int(data.get("top_k", 5))
+    if not query:
+        return jsonify({"error": "請輸入搜尋內容"}), 400
+    results = kb.rag_search(query, top_k=top_k)
+    return jsonify({"query": query, "results": results})
 
 
 if __name__ == "__main__":

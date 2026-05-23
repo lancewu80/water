@@ -4,3 +4,8 @@ requests
 ddgs
 google-genai
 python-dotenv
+# ── RAG 知識庫（可選，不安裝則知識庫功能停用）──────────────
+chromadb
+python-docx
+PyMuPDF
+mammoth

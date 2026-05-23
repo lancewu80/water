@@ -936,3 +936,98 @@ body { background: var(--bg); color: var(--text); min-height: 100vh; }
   .title { font-size: 1.5rem; }
   .news-grid { grid-template-columns: 1fr; }
 }
+
+/* ══════════════════════════════════════════════════════════
+   App Navigation（知識庫頁面切換）
+══════════════════════════════════════════════════════════ */
+
+/* header-inner 改為 flex row 以容納右側 nav */
+.header-inner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  position: relative;
+}
+
+.app-nav {
+  display: flex;
+  align-items: center;
+  gap: .5rem;
+  flex-shrink: 0;
+}
+
+.app-nav-btn {
+  padding: .45rem 1rem;
+  background: rgba(255,255,255,0.18);
+  border: 1.5px solid rgba(255,255,255,0.35);
+  border-radius: 8px;
+  color: #fff;
+  font-size: .82rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .15s, transform .1s;
+  white-space: nowrap;
+  backdrop-filter: blur(4px);
+}
+.app-nav-btn:hover     { background: rgba(255,255,255,0.28); transform: translateY(-1px); }
+.app-nav-btn:active    { transform: translateY(0); }
+.app-nav-kb { letter-spacing: .3px; }
+
+/* ══════════════════════════════════════════════════════════
+   KB Toggle Row（AI 模式下的知識庫開關）
+══════════════════════════════════════════════════════════ */
+.kb-toggle-row {
+  display: flex;
+  align-items: center;
+  gap: .65rem;
+  flex-wrap: wrap;
+  margin-bottom: .75rem;
+  padding: .5rem .75rem;
+  background: var(--bg);
+  border-radius: 8px;
+  border: 1px solid var(--border);
+}
+
+.kb-toggle-label {
+  display: flex;
+  align-items: center;
+  gap: .4rem;
+  cursor: pointer;
+  font-size: .82rem;
+  font-weight: 600;
+  color: var(--text);
+  white-space: nowrap;
+  user-select: none;
+}
+
+.kb-toggle-check {
+  width: 15px;
+  height: 15px;
+  accent-color: #10b981;
+  cursor: pointer;
+}
+
+.kb-toggle-icon { font-size: 1rem; }
+
+.kb-toggle-hint {
+  font-size: .75rem;
+  color: #059669;
+  font-style: italic;
+  flex: 1;
+  min-width: 0;
+}
+
+.kb-toggle-goto {
+  padding: .28rem .7rem;
+  background: rgba(16,185,129,0.1);
+  border: 1px solid rgba(16,185,129,0.3);
+  border-radius: 6px;
+  color: #059669;
+  font-size: .75rem;
+  font-weight: 600;
+  cursor: pointer;
+  transition: background .12s;
+  white-space: nowrap;
+  margin-left: auto;
+}
+.kb-toggle-goto:hover { background: rgba(16,185,129,0.2); }

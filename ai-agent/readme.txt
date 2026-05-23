@@ -14,3 +14,15 @@ export ANTHROPIC_API_KEY="你的金鑰"
 
 Gemini API Key:
 https://aistudio.google.com/api-keys
+
+
+Step 1：安裝套件
+# 後端
+pip install chromadb python-docx PyMuPDF
+
+# 拉取 Embedding 模型（只需一次，約 274 MB）
+ollama pull nomic-embed-text
+
+# 前端
+cd frontend
+npm install @tiptap/react @tiptap/starter-kit @tiptap/extension-link
