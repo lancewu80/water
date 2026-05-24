@@ -33,9 +33,11 @@
 | **上傳文件** | 拖曳 `.pdf` / `.docx`，自動切塊、向量化索引 |
 | **HTML 頁面** | 富文字編輯器（TipTap）直接撰寫，即時索引 |
 | **語意搜尋** | 輸入自然語言，找最相關的知識片段 |
+| **進階搜尋** | 語意搜尋旁的 🤖 AI Tab，直接讓 LLM 參考 KB 回答；可選 Ollama / Gemini / Multi-Agent |
 | **原始格式預覽** | PDF → 瀏覽器原生閱讀器；DOCX → HTML 渲染 |
 | **下載** | 一鍵下載原始 PDF / DOCX 檔案 |
 | **AI 整合** | 勾選「🗄️ 使用知識庫」，AI 回答時自動注入相關內容（RAG） |
+| **RAG 閾值過濾** | cosine distance > 0.75 的不相關 chunks 不注入 LLM，避免知識庫誤導 AI |
 
 ---
 
@@ -192,6 +194,13 @@ Orchestrator 依複雜度自動路由：
 
 切換到「🔍 語意搜尋」頁簽，輸入自然語言，找到相關知識片段，點擊「🔍 查看全文」可預覽完整文件。
 
+若語意搜尋結果不滿意，切換到「🤖 進階搜尋」頁簽：
+
+- 相同查詢字串自動帶入（兩個 Tab 共用輸入框）
+- 選擇 AI 模型（🦙 Ollama / ✨ Gemini / 🔀 Multi-Agent）
+- 按「🤖 詢問 AI」，LLM 會參考知識庫後以自然語言回答
+- AI 回答支援 Markdown 格式渲染（標題、粗體、條列、程式碼）
+
 **3. 讓 AI 使用知識庫**
 
 在主搜尋頁面勾選「🗄️ 使用知識庫」，AI 回答時會自動：
@@ -231,7 +240,10 @@ ai-agent/
 │       ├── kb.css           ← 知識庫頁面樣式
 │       └── pages/
 │           └── KnowledgeBase.jsx  ← 知識庫管理頁面
-├── 系統設計文件.docx        ← 完整架構設計文件
+│                                     ・KbSearchPanel     語意搜尋
+│                                     ・KbAiSearchPanel   進階搜尋（LLM + KB）
+│                                     ・MarkdownText      Markdown 渲染元件
+├── 系統設計文件.docx        ← 完整架構設計文件（v3.1）
 └── README.md               ← 本檔案
 ```
 
@@ -316,6 +328,27 @@ pip install chromadb python-docx PyMuPDF mammoth
 pip install mammoth
 ```
 安裝完成後**不需重啟** Flask，下次請求自動生效。
+
+### Q: 進階搜尋和語意搜尋有什麼差異？
+
+| | 語意搜尋 | 進階搜尋 |
+|---|---|---|
+| **技術** | ChromaDB cosine 向量搜尋 | LLM（Ollama / Gemini / Multi-Agent） |
+| **結果** | 最相關的文件片段清單 | AI 自然語言綜合回答 |
+| **適用場景** | 找特定段落、定位文件位置 | 需要推理、彙整或超出 KB 範圍的問題 |
+| **KB 參考** | 直接顯示 KB 內容 | 注入 KB context 後 LLM 合成回答 |
+
+兩個 Tab 的查詢字串同步，可在語意搜尋找到片段後無縫切換到進階搜尋取得 AI 解析。
+
+### Q: 進階搜尋選 Gemini 卻說「知識庫無相關內容，無法回答」？
+
+這是 RAG 距離閾值機制的正確行為：
+
+- 知識庫的文件與問題 **cosine distance > 0.75**（相似度 < 25%），系統判定無相關內容
+- 不注入無關的 KB context，讓 Gemini 改用自身訓練知識回答
+- 調整 `kb.py` 中的 `RAG_THRESHOLD`（預設 `0.75`）可改變靈敏度
+
+若需 AI 從 **企業知識庫**回答，請先在知識庫上傳相關文件，讓 KB 有對應內容可引用。
 
 ### Q: Gemini API Key 在哪申請？
 前往 https://aistudio.google.com/ → 登入 Google 帳號 → Get API Key → 建立 Free Tier Key。
